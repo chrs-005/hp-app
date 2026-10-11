@@ -3,7 +3,7 @@
 <head>
 <base target="_top">
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#1f6f4a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -71,7 +71,10 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; min-height: 100%; }
+/* Behave like an app, not a web page: no pinch / double-tap zoom, no rubber-band or
+   pull-to-refresh, no sideways drift, no text selection or long-press menus on the UI. */
+*, *::before, *::after { touch-action: pan-x pan-y; }
+html, body { margin: 0; min-height: 100%; overflow-x: hidden; overscroll-behavior: none; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -79,7 +82,14 @@ body {
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
+input, textarea, select, [contenteditable] { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+img, svg { -webkit-user-drag: none; }
+.grid-wrap, .chips, .scroll-x, .modal { overscroll-behavior: contain; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 h1, h2, h3 { margin: 0; line-height: 1.2; }
@@ -455,6 +465,11 @@ window.HP_API_URL = window.HP_API_URL || '';
 'use strict';
 
 // =================================================================== helpers
+// App-like touch. iPhone Safari ignores user-scalable=no, so pinch is blocked here as well.
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, (e) => e.preventDefault(), { passive: false }));
+document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
+
 const $ = (sel, el) => (el || document).querySelector(sel);
 const $$ = (sel, el) => Array.from((el || document).querySelectorAll(sel));
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1640,7 +1655,7 @@ function renderStats(v) {
   html += '</div>';
 
   html += '<section class="card"><div class="card-head"><h2>Scouts</h2>' +
-    '<label class="sr" for="sortSel">Sort by</label><select class="input" id="sortSel" style="width:auto;margin:0;min-height:38px;padding:6px 10px;font-size:14px">' +
+    '<label class="sr" for="sortSel">Sort by</label><select class="input" id="sortSel" style="width:auto;margin:0;min-height:38px;padding:6px 10px;font-size:16px">' +
     [['pct', 'Lowest attendance'], ['streak', 'Missed in a row'], ['late', 'Most lates'], ['broken', 'Said yes, didn\'t come'], ['patrol', 'Patrol'], ['name', 'Name']]
       .map(o => '<option value="' + o[0] + '"' + (st.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div>' +
     '<div class="card-body stable" style="padding:8px">' +
@@ -1764,7 +1779,7 @@ function drawMeetingReport(dates) {
   const noShows = members.filter(m => { const r = rec(d, m.id) || {}; return (r.wedStatus === 'coming' || r.wedStatus === 'late') && r.satStatus === 'absent'; });
 
   el.innerHTML =
-    '<div class="card-head"><h2>Report</h2><select class="input" id="mtSel" style="width:auto;max-width:60%;margin:0;min-height:38px;padding:6px 10px;font-size:14px">' +
+    '<div class="card-head"><h2>Report</h2><select class="input" id="mtSel" style="width:auto;max-width:60%;margin:0;min-height:38px;padding:6px 10px;font-size:16px">' +
       dates.map(x => '<option value="' + esc(x) + '"' + (x === d ? ' selected' : '') + '>' + esc(keyLabel(x)) + (isCancelled(x) ? ' (no réunion)' : '') + '</option>').join('') + '</select></div>' +
     '<div class="card-body">' +
       (cancelled ? '<div class="banner bad">' + icon('calendar') + '<span class="grow">No réunion on this date.</span></div>' :

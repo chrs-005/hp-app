@@ -42,7 +42,7 @@ const MAX_LOGIN_FAILS = 5;
 function doGet() {
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('HP App · Griffons')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
