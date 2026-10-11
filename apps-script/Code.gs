@@ -76,6 +76,7 @@ const ACTIONS = {
   createLeaderAccounts: createLeaderAccounts_,
   saveEvent: saveEvent_,
   deleteEvent: deleteEvent_,
+  changePin: changePin_,
 };
 
 // ---------------------------------------------------------------- actions
@@ -133,7 +134,8 @@ function login_(p) {
     throw new Error('Wrong name or PIN.');
   }
   cache.remove(failKey);
-  return { token: makeToken_(r.id) };
+  // Easy PINs like 0000 are fine to hand out, but the person must pick their own now.
+  return { token: makeToken_(r.id), mustChangePin: isWeakPin_(pin) };
 }
 
 /** payload.sync = true forces a check of the members file in Drive (the ↻ button). */
@@ -711,6 +713,31 @@ function cleanName_(name) {
   if (!n) throw new Error('Name is required.');
   if (n.length > 60) throw new Error('Name is too long.');
   return n;
+}
+
+/** 0000, 1111, 1234, 4321, 2468… — the first PINs anyone would try. */
+function isWeakPin_(pin) {
+  const p = String(pin || '');
+  if (/^(\d)\1+$/.test(p)) return true;
+  const d = p.split('').map(Number);
+  const step = d[1] - d[0];
+  return Math.abs(step) <= 2 && d.every((x, i) => i === 0 || x - d[i - 1] === step);
+}
+
+/** Anyone signed in: payload { pin (current), newPin }. */
+function changePin_(p, token) {
+  const me = auth_(token);
+  const newPin = cleanPin_(p.newPin);
+  if (isWeakPin_(newPin)) throw new Error('Too easy to guess. Avoid 0000, 1111, 1234…');
+  return withLock_(() => {
+    const r = readTable_('reporters').find(x => x.id === me.id);
+    const current = String(p.pin || '').trim();
+    const ok = r.pinHash.indexOf('plain:') === 0 ? current === r.pinHash.slice(6) : r.pinHash === hash_(r.id + ':' + current);
+    if (!ok) throw new Error('Your current PIN is wrong.');
+    if (newPin === current) throw new Error('Choose a PIN different from the current one.');
+    updateRow_('reporters', r._row, { pinHash: hash_(r.id + ':' + newPin) });
+    return { ok: true };
+  });
 }
 
 function cleanPin_(pin) {

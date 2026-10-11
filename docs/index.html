@@ -866,10 +866,12 @@ function renderLogin() {
     $('#lgErr').textContent = '';
     try {
       const name = $('#lgName').value.trim();
-      const res = await call('login', { name: name, pin: $('#lgPin').value });
+      const pin = $('#lgPin').value;
+      const res = await call('login', { name: name, pin: pin });
       S.token = res.token;
-      store.set('hp.token', res.token);
       store.set('hp.lastName', name);
+      if (res.mustChangePin) { renderOwnPin(pin); return; }   // token is kept only once a real PIN is chosen
+      store.set('hp.token', res.token);
       app.innerHTML = '<div class="loading"><div><div class="spinner"></div>Loading…</div></div>';
       await loadState();
     } catch (err) {
@@ -877,6 +879,52 @@ function renderLogin() {
       btn.disabled = false;
     }
   };
+}
+
+const pinFields = (prefix) =>
+  '<label class="field">New PIN (4–8 digits)<input class="input" id="' + prefix + 'New" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" required></label>' +
+  '<label class="field">Repeat the new PIN<input class="input" id="' + prefix + 'New2" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" required></label>';
+
+/** First sign-in with an easy PIN (0000, 1234…): choose a personal one before entering. */
+function renderOwnPin(oldPin) {
+  app.innerHTML = authFrame(
+    '<h1>Choose your own PIN</h1><p class="sub">You signed in with a temporary PIN. Pick a personal one that only you know (not 0000, 1111, 1234…).</p>' +
+    '<form id="ownPinForm">' + pinFields('op') + '<button class="btn primary block" type="submit">Save my PIN</button><p class="err" id="opErr"></p></form>');
+  $('#opNew').focus();
+  $('#ownPinForm').onsubmit = async (e) => {
+    e.preventDefault();
+    if ($('#opNew').value !== $('#opNew2').value) { $('#opErr').textContent = 'The two PINs are different.'; return; }
+    const btn = $('#ownPinForm button');
+    btn.disabled = true;
+    try {
+      await call('changePin', { pin: oldPin, newPin: $('#opNew').value });
+      store.set('hp.token', S.token);
+      toast('PIN saved');
+      await loadState();
+    } catch (err) {
+      $('#opErr').textContent = err.message;
+      btn.disabled = false;
+    }
+  };
+}
+
+function openChangePin() {
+  openModal('<h2>Change my PIN</h2><form id="cpForm" style="margin-top:14px">' +
+    '<label class="field">Current PIN<input class="input" id="cpOld" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="current-password" required></label>' +
+    pinFields('cp') + '<p class="err" id="cpErr"></p>' +
+    '<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button></div></form>', {
+    onMount: (m, close) => {
+      $('#cpForm', m).onsubmit = async (e) => {
+        e.preventDefault();
+        if ($('#cpNew', m).value !== $('#cpNew2', m).value) { $('#cpErr', m).textContent = 'The two new PINs are different.'; return; }
+        try {
+          await call('changePin', { pin: $('#cpOld', m).value, newPin: $('#cpNew', m).value });
+          close();
+          toast('PIN changed');
+        } catch (err) { $('#cpErr', m).textContent = err.message; }
+      };
+    },
+  });
 }
 
 function renderSetup() {
@@ -1005,7 +1053,7 @@ function renderHome(v) {
     '</div></section>';
   html += '</div>';
 
-  html += '<div class="row" style="justify-content:space-between"><span class="muted small">Signed in as ' + esc(me.name) + '</span><button class="btn sm" data-act="logout2">' + icon('logout', 'sm') + 'Sign out</button></div>';
+  html += '<div class="row" style="justify-content:space-between"><span class="muted small">Signed in as ' + esc(me.name) + '</span><span class="row"><button class="btn sm" data-act="pin">Change my PIN</button><button class="btn sm" data-act="logout2">' + icon('logout', 'sm') + 'Sign out</button></span></div>';
   v.innerHTML = html;
 
   $$('[data-go]', v).forEach(b => {
@@ -1020,6 +1068,7 @@ function renderHome(v) {
   $$('[data-tab-go]', v).forEach(b => { b.onclick = () => go(b.dataset.tabGo); });
   $$('[data-member]', v).forEach(b => { b.onclick = () => openMemberHistory(b.dataset.member); });
   $('[data-act="logout2"]', v).onclick = logout;
+  $('[data-act="pin"]', v).onclick = openChangePin;
 }
 
 function attItem(r) {

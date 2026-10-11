@@ -191,6 +191,20 @@ assert.strictEqual(st5.attendance.filter(a => a.date === special).length, 0);
 c3('deleteEvent', { id: noel }, setup3.token);
 assert.strictEqual(c3('state', {}, setup3.token).events.length, 3);   // deleted camps do not come back
 
+// Extra chiefs with an easy PIN: equal rights, must pick their own PIN at first login.
+['Chief Two', 'Chief Three'].forEach(n => c3('saveReporter', { name: n, pin: '0000', role: 'admin', patrols: [] }, setup3.token));
+const two = c3('login', { name: 'chief two', pin: '0000' });
+assert.strictEqual(two.mustChangePin, true);
+const twoState = c3('state', {}, two.token);
+assert.strictEqual(twoState.me.role, 'admin');
+assert.ok(twoState.source && twoState.reporters.length >= 3);          // same access as the first chief
+c3('saveEvent', { title: 'Made by chief two' }, two.token);
+assert.match(s3.api({ action: 'changePin', payload: { pin: '0000', newPin: '1234' }, token: two.token }).error, /Too easy/);
+assert.match(s3.api({ action: 'changePin', payload: { pin: '9999', newPin: '582913' }, token: two.token }).error, /current PIN is wrong/);
+c3('changePin', { pin: '0000', newPin: '582913' }, two.token);
+assert.strictEqual(c3('login', { name: 'Chief Two', pin: '582913' }).mustChangePin, false);
+assert.strictEqual(s3.api({ action: 'login', payload: { name: 'Chief Two', pin: '0000' } }).ok, false);
+assert.strictEqual(c3('login', { name: 'Chief', pin: '1234' }).mustChangePin, true);   // 1234 counts as easy too
 // Setup with a bad link still creates the chief and reports the problem.
 const f4 = makeFakes({ source: source, standalone: true });
 const s4 = loadServer(code, f4);
