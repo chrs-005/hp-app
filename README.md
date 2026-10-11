@@ -1,6 +1,6 @@
 # HP App — Troupe Griffons
 
-Attendance app for the Saturday scout meetings. Patrol leaders fill the **Presence** tab on
+Attendance app for the Saturday réunions. The CP and SP fill the **Presence** tab on
 Wednesday (who is coming) and on Saturday (who came). The chief sees **Stats** and manages
 everything in **Admin**. It installs on iPhone and Samsung like a normal app (PWA) and opens
 full screen on a laptop.
@@ -53,8 +53,8 @@ GitHub Pages updates within a minute.
    The scouts load right away.
 2. The app stays connected to that file: when you edit it in Drive, the change shows in the app
    within 5 minutes (or tap ↻ to check now). Admin shows the connection status.
-3. **Admin → Patrol leaders → Create accounts with PINs**. Leaders are the names written in
-   **green or red** in the members file; each gets a 6-digit PIN for his own patrol. Press **Send**
+3. **Admin → CP & SP → Create accounts with PINs**. CP = names written in **green**, SP = names in **red**
+   in the members file; each gets a 4-digit PIN for his own patrol. Press **Send**
    next to each one (WhatsApp, SMS…) — PINs are shown only once.
 
 ## 4. Install on the leaders' phones
@@ -70,7 +70,7 @@ Then sign in with full name + PIN (asked only once).
 
 - One row with the patrol names side by side, the names under each patrol, birth years in a column
   on the left, a "Total" row at the end.
-- **Green or red name = patrol leader** (gets an account, reports for that patrol).
+- **Green name = CP, red name = SP** (each gets an account and fills his own patrol).
 - Edit the same file in Drive and the app follows automatically. To switch to another file or tab:
   **Admin → Members list** → new link / tab → **Preview** → **Import**.
   Scouts removed from the file keep their history. A scout is recognised by his name.
@@ -85,9 +85,9 @@ Then sign in with full name + PIN (asked only once).
 
 ## Rules
 
-- Red glow: missed 2 Saturdays in a row. Percentages are judged from the 5th Saturday: amber under 75 %,
+- Red glow: missed 2 réunions in a row. Percentages are judged from the 5th réunion: amber under 75 %,
   red under 60 %. Change them in **Admin → Rules & season**. "Late" counts as came.
-- The chief can mark a Saturday as **No meeting** (Presence tab): it does not count anywhere.
+- The chief can cancel a réunion: **Home** or **Presence → No réunion this Saturday?** — everyone sees it: it does not count anywhere.
 
 ## Updating
 
@@ -98,7 +98,7 @@ Then sign in with full name + PIN (asked only once).
 
 ## Forgot a PIN
 
-- Leader: chief → **Admin → Reporters → Edit** → new PIN.
+- CP / SP: chief → **Admin → Accounts → Edit** → new PIN.
 - Chief: in the **HP App – Database (do not edit)** sheet, tab `reporters`, type `plain:1234` in your `pinHash` cell,
   sign in with 1234 (it is re-encrypted automatically), then change it.
 

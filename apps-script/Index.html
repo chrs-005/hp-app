@@ -595,6 +595,13 @@ function indexData() {
   S.statsCache = null;
 }
 const isAdmin = () => S.data.me.role === 'admin';
+/** 'admin', 'cp' or 'sp'. Older accounts ("reporter") take CP / SP from their name's color in the members file. */
+function roleKey(r) {
+  if (r.role === 'admin' || r.role === 'cp' || r.role === 'sp') return r.role;
+  const m = S.data.members.find(x => nameKey(x.name) === nameKey(r.name));
+  return m && m.leader === 'red' ? 'sp' : 'cp';
+}
+const roleLabel = (r) => ({ admin: 'Chief', cp: 'CP', sp: 'SP' }[roleKey(r)]);
 const patrolColor = (p) => 'var(--p' + (((S.patrolIdx.get(p) || 0) % 8) + 1) + ')';
 const patrolRank = (p) => (S.patrolIdx.has(p) ? S.patrolIdx.get(p) : 99);
 function myPatrols() {
@@ -1035,7 +1042,7 @@ function renderShell() {
       '<aside class="sidebar">' +
         '<div class="brand"><div class="logo" aria-hidden="true">⚜</div><div><b>' + esc(S.data.settings.teamName) + '</b><span>HP App</span></div></div>' +
         '<nav>' + nav + '</nav>' +
-        '<div class="side-foot"><b>' + esc(me.name) + '</b><span class="muted">' + (me.role === 'admin' ? 'Chief' : 'Reporter') + '</span>' +
+        '<div class="side-foot"><b>' + esc(me.name) + '</b><span class="muted">' + roleLabel(me) + '</span>' +
           '<button class="btn ghost sm" data-act="logout" style="margin-top:8px;padding-left:0">' + icon('logout', 'sm') + 'Sign out</button></div>' +
       '</aside>' +
       '<div class="main">' +
@@ -1084,7 +1091,7 @@ function renderHome(v) {
 
   let html =
     '<div class="hello"><h1>Hi ' + esc(firstName(me.name)) + '</h1><p class="sub">' +
-      (me.role === 'admin' ? 'Chief · all patrols' : 'Reporter · ' + (me.patrols.length ? esc(patrols.join(', ')) : 'all patrols')) + '</p></div>';
+      (me.role === 'admin' ? 'Chief · all patrols' : roleLabel(me) + ' · ' + (me.patrols.length ? esc(patrols.join(', ')) : 'all patrols')) + '</p></div>';
 
   if (!S.data.members.length) {
     html += '<div class="banner warn">' + icon('alert') + '<span class="grow">No scouts loaded yet.' + (isAdmin() ? ' Go to Admin and import the members list from Drive.' : ' Ask the chief to import the members list.') + '</span>' +
@@ -1093,7 +1100,13 @@ function renderHome(v) {
 
   html += '<div class="grid-2">';
   html += '<section class="card"><div class="card-head"><h2>' + esc(fmtLong(next)) + '</h2><span class="pill accent">' + relLabel(next) + '</span></div><div class="card-body" style="padding-top:4px;padding-bottom:4px">' +
-    (isCancelled(next) ? '<p class="empty">No meeting this Saturday.</p>' : step(next, 'wed', 'They said · by Wednesday') + step(next, 'sat', 'They came · on Saturday')) + '</div></section>';
+    (isCancelled(next)
+      ? '<div class="banner bad" style="margin:12px 0">' + icon('calendar') + '<span class="grow"><b>No réunion this Saturday</b>' +
+          ((S.meetingByDate.get(next) || {}).note ? ' — ' + esc(S.meetingByDate.get(next).note) : '') + '</span>' +
+          (isAdmin() ? '<button class="btn sm" data-reunion-on="' + next + '">Undo</button>' : '') + '</div>'
+      : step(next, 'wed', 'They said · by Wednesday') + step(next, 'sat', 'They came · on Saturday') +
+        (isAdmin() ? '<div class="step"><button class="btn ghost sm" style="padding-left:0" data-reunion-off="' + next + '">' + icon('calendar', 'sm') + 'No réunion this Saturday?</button></div>' : '')) +
+    '</div></section>';
 
   if (lastMissing > 0 && !isCancelled(last) && last >= S.data.settings.seasonStart) {
     html += '<section class="card"><div class="card-head"><h2>' + esc(fmtLong(last)) + '</h2><span class="pill warn">' + plural(lastMissing, 'scout') + ' not marked</span></div><div class="card-body" style="padding-top:4px;padding-bottom:4px">' +
@@ -1106,7 +1119,7 @@ function renderHome(v) {
   html += '<section class="card"><div class="card-head"><h2>Needs attention</h2>' + (alerts.length ? '<span class="pill bad">' + alerts.length + '</span>' : '') + '</div><div class="card-body">' +
     (alerts.length ? '<div class="att-list">' + alerts.slice(0, 6).map(attItem).join('') + '</div>' +
       (alerts.length > 6 && isAdmin() ? '<button class="btn block" style="margin-top:12px" data-tab-go="stats">See all ' + alerts.length + '</button>' : '')
-      : '<p class="muted">Nobody missed ' + S.data.settings.streakAlert + ' Saturdays in a row' + (stats.tracking ? ' or has low attendance.' : '. Percentages start after ' + S.data.settings.minMeetings + ' meetings (' + stats.held.length + ' so far).') + '</p>') +
+      : '<p class="muted">Nobody missed ' + S.data.settings.streakAlert + ' réunions in a row' + (stats.tracking ? ' or has low attendance.' : '. Percentages start after ' + S.data.settings.minMeetings + ' réunions (' + stats.held.length + ' so far).') + '</p>') +
     '</div></section>';
   html += '<section class="card hidden" id="remCard"></section>';
   html += '</div>';
@@ -1128,6 +1141,8 @@ function renderHome(v) {
   $$('[data-member]', v).forEach(b => { b.onclick = () => openMemberHistory(b.dataset.member); });
   $('[data-act="logout2"]', v).onclick = logout;
   $('[data-act="pin"]', v).onclick = openChangePin;
+  $$('[data-reunion-off]', v).forEach(b => { b.onclick = () => openCancelReunion(b.dataset.reunionOff); });
+  $$('[data-reunion-on]', v).forEach(b => { b.onclick = () => setMeetingCancelled(b.dataset.reunionOn, false, ''); });
   drawReminders();
 }
 
@@ -1291,10 +1306,10 @@ function drawBanner() {
       html = '<div class="banner warn">' + icon('clock') + '<span class="grow">This has not happened yet. Fill "They came" during or after it.</span></div>';
     }
   } else if (m && m.cancelled) {
-    html = '<div class="banner bad">' + icon('calendar') + '<span class="grow"><b>No meeting this Saturday</b>' + (m.note ? ' — ' + esc(m.note) : '') + '</span>' +
+    html = '<div class="banner bad">' + icon('calendar') + '<span class="grow"><b>No réunion this Saturday</b>' + (m.note ? ' — ' + esc(m.note) : '') + '</span>' +
       (isAdmin() ? '<button class="btn sm" data-meeting="open">Undo</button>' : '') + '</div>';
   } else if (P.phase === 'sat' && P.date > todayIso()) {
-    html = '<div class="banner warn">' + icon('clock') + '<span class="grow">This Saturday has not happened yet. Fill this after the meeting.</span></div>';
+    html = '<div class="banner warn">' + icon('clock') + '<span class="grow">This Saturday has not happened yet. Fill this after the réunion.</span></div>';
   } else if (P.date < S.data.settings.seasonStart) {
     html = '<div class="banner warn">' + icon('alert') + '<span class="grow">This date is before the season start (' + esc(fmtShort(S.data.settings.seasonStart)) + ') and is not counted in the stats.</span></div>';
   }
@@ -1349,13 +1364,23 @@ function editEvent(ev, onSaved) {
   });
 }
 
+/** Chief: cancel a Saturday. Everyone then sees "No réunion this Saturday". */
+function openCancelReunion(date) {
+  openModal('<h2>No réunion on ' + esc(fmtLong(date)) + '?</h2>' +
+    '<p class="sub">Everyone will see "No réunion this Saturday". Nobody can fill it, it does not count in the statistics and no reminders are sent.</p>' +
+    '<label class="field" style="margin-top:14px">Reason shown to everyone (optional)<input class="input" id="mtNote" maxlength="200" placeholder="e.g. Holiday, camp, exams"></label>' +
+    '<div class="modal-actions"><button class="btn" data-close>Keep it</button><button class="btn danger" data-ok>Cancel the réunion</button></div>', {
+    onMount: (m, close) => { $('[data-ok]', m).onclick = () => { close(); setMeetingCancelled(date, true, $('#mtNote', m).value); }; },
+  });
+}
+
 async function setMeetingCancelled(date, cancelled, note) {
   try {
     const res = await call('setMeeting', { date: date, cancelled: cancelled, note: note });
     S.data.meetings = res.meetings;
     indexData();
     go(S.tab, true);
-    toast(cancelled ? 'Marked as no meeting' : 'Meeting is back on');
+    toast(cancelled ? 'Réunion cancelled' : 'The réunion is back on');
   } catch (e) { toast(e.message, 'bad'); }
 }
 
@@ -1389,7 +1414,7 @@ function drawSummary() {
     if (w.coming + w.late + w.out) html += '<p class="sum-note">They said: ' + w.coming + ' coming, ' + w.late + ' late, ' + w.out + ' not coming.</p>';
   }
   if (isAdmin() && P.mode === 'reunion' && !isCancelled(P.date)) {
-    html += '<p class="sum-note"><button class="btn ghost sm" style="padding-left:0" data-meeting="cancel">' + icon('calendar', 'sm') + 'No meeting this Saturday?</button></p>';
+    html += '<p class="sum-note"><button class="btn ghost sm" style="padding-left:0" data-meeting="cancel">' + icon('calendar', 'sm') + 'No réunion this Saturday?</button></p>';
   }
   const el = $('#presSummary');
   el.innerHTML = html;
@@ -1403,13 +1428,7 @@ function drawSummary() {
     drawSummary();
   };
   const cancel = $('[data-meeting="cancel"]', el);
-  if (cancel) cancel.onclick = () => {
-    openModal('<h2>No meeting on ' + esc(fmtLong(P.date)) + '?</h2><p class="sub">This Saturday will not count in the statistics and reporters cannot fill it.</p>' +
-      '<label class="field" style="margin-top:14px">Note (optional)<input class="input" id="mtNote" maxlength="200" placeholder="e.g. Holiday, camp, exams"></label>' +
-      '<div class="modal-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" data-ok>Mark as no meeting</button></div>', {
-      onMount: (m, close) => { $('[data-ok]', m).onclick = () => { close(); setMeetingCancelled(P.date, true, $('#mtNote', m).value); }; },
-    });
-  };
+  if (cancel) cancel.onclick = () => openCancelReunion(P.date);
   // keep patrol counters in the list headers in sync
   $$('[data-pcount]').forEach(c => {
     const ms = members.filter(m => m.patrol === c.dataset.pcount);
@@ -1464,7 +1483,7 @@ function rowHtml(m) {
 }
 
 function leaderPill(m) {
-  return m.leader ? '<span class="pill accent" title="Patrol leader (name in color in the members file)">★ Leader</span>' : '';
+  return m.leader ? '<span class="pill accent">' + (m.leader === 'red' ? 'SP' : 'CP') + '</span>' : '';
 }
 
 function redrawRow(id) {
@@ -1524,7 +1543,7 @@ function renderOverview(v) {
         const st = stats.byId.get(m.id);
         const pctCls = st && st.pctLevel === 'low' ? 'pct-low' : st && st.pctLevel === 'warn' ? 'pct-warn' : '';
         return '<tr style="--rt:' + tint(m.birthYear) + '">' +
-          '<th class="gname" scope="row"><button data-member="' + esc(m.id) + '">' + esc(m.name) + (m.leader ? ' <span class="muted">★</span>' : '') + '</button></th>' +
+          '<th class="gname" scope="row"><button data-member="' + esc(m.id) + '">' + esc(m.name) + (m.leader ? ' <span class="muted small">' + (m.leader === 'red' ? 'SP' : 'CP') + '</span>' : '') + '</button></th>' +
           '<td class="gmeta">' + esc(m.patrol) + '</td><td class="gmeta">' + esc(m.birthYear) + '</td>' +
           '<td class="gmeta ' + pctCls + (st && st.streakAlert ? ' glow-text' : '') + '">' + pctText(st ? st.pct : null) + '</td>' +
           cols.map(c => cell(c.key, m)).join('') + '</tr>';
@@ -1592,26 +1611,26 @@ function renderStats(v) {
   const patrols = S.data.patrols;
 
   let html =
-    '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>Statistics</h1><p class="sub">Season from ' + esc(fmtMed(set.seasonStart)) + ' · ' + plural(held.length, 'Saturday') + ' recorded</p></div>' +
+    '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>Statistics</h1><p class="sub">Season from ' + esc(fmtMed(set.seasonStart)) + ' · ' + plural(held.length, 'réunion') + ' recorded</p></div>' +
     '<button class="btn sm" id="csvBtn">' + icon('download', 'sm') + 'Export CSV</button></div>' +
     '<div class="chips">' + ['all'].concat(patrols).map(p =>
       '<button class="chip" data-spatrol="' + esc(p) + '" aria-pressed="' + (st.patrol === p) + '" style="--pc:' + (p === 'all' ? 'var(--none)' : patrolColor(p)) + '">' +
       (p === 'all' ? 'Whole troupe' : '<span class="pdot"></span>' + esc(p)) + '</button>').join('') + '</div>';
 
   html += '<div class="kpis">' +
-    kpi('Saturdays held', held.length, all.tracking ? 'Percentages are tracked' : 'Percentages start at ' + set.minMeetings) +
+    kpi('Réunions held', held.length, all.tracking ? 'Percentages are tracked' : 'Percentages start at ' + set.minMeetings) +
     kpi('Average attendance', pctText(avg), plural(rows.length, 'scout')) +
-    kpi('Last Saturday', lastM ? (lastM.present + lastM.late) + '/' + lastM.done : '–', lastM ? fmtShort(lastM.date) + ' · ' + lastM.late + ' late' : 'No data yet') +
+    kpi('Last réunion', lastM ? (lastM.present + lastM.late) + '/' + lastM.done : '–', lastM ? fmtShort(lastM.date) + ' · ' + lastM.late + ' late' : 'No data yet') +
     kpi('Need attention', alerts.length, alerts.filter(r => r.streakAlert).length + ' missed ' + set.streakAlert + '+ in a row') +
     '</div>';
 
   html += '<div class="grid-2">';
   html += '<section class="card"><div class="card-head"><h2>Needs attention</h2></div><div class="card-body">' +
     (alerts.length ? '<div class="att-list">' + alerts.map(attItem).join('') + '</div>' :
-      '<p class="muted">Nobody to worry about. Alerts appear when a scout misses ' + set.streakAlert + ' Saturdays in a row' +
-      (all.tracking ? ', or attendance falls under ' + set.warnPct + '%.' : '. Percentage alerts start after ' + set.minMeetings + ' Saturdays (' + held.length + ' so far).') + '</p>') +
+      '<p class="muted">Nobody to worry about. Alerts appear when a scout misses ' + set.streakAlert + ' réunions in a row' +
+      (all.tracking ? ', or attendance falls under ' + set.warnPct + '%.' : '. Percentage alerts start after ' + set.minMeetings + ' réunions (' + held.length + ' so far).') + '</p>') +
     '</div></section>';
-  html += '<section class="card"><div class="card-head"><h2>Attendance per Saturday</h2></div><div class="card-body">' + chartHtml(perMeeting, set) + '</div></section>';
+  html += '<section class="card"><div class="card-head"><h2>Attendance per réunion</h2></div><div class="card-body">' + chartHtml(perMeeting, set) + '</div></section>';
   html += '</div>';
 
   html += '<section class="card"><div class="card-head"><h2>Scouts</h2>' +
@@ -1663,7 +1682,7 @@ function statRow(r) {
 
 function chartHtml(perMeeting, set) {
   const pts = perMeeting.filter(m => m.done);
-  if (!pts.length) return '<p class="empty">No Saturday has been recorded yet.</p>';
+  if (!pts.length) return '<p class="empty">No réunion has been recorded yet.</p>';
   const shown = pts.slice(-16);
   const every = shown.length > 10 ? 2 : 1;
   return '<div class="chart" id="chart">' +
@@ -1740,10 +1759,10 @@ function drawMeetingReport(dates) {
 
   el.innerHTML =
     '<div class="card-head"><h2>Report</h2><select class="input" id="mtSel" style="width:auto;max-width:60%;margin:0;min-height:38px;padding:6px 10px;font-size:14px">' +
-      dates.map(x => '<option value="' + esc(x) + '"' + (x === d ? ' selected' : '') + '>' + esc(keyLabel(x)) + (isCancelled(x) ? ' (no meeting)' : '') + '</option>').join('') + '</select></div>' +
+      dates.map(x => '<option value="' + esc(x) + '"' + (x === d ? ' selected' : '') + '>' + esc(keyLabel(x)) + (isCancelled(x) ? ' (no réunion)' : '') + '</option>').join('') + '</select></div>' +
     '<div class="card-body">' +
-      (cancelled ? '<div class="banner bad">' + icon('calendar') + '<span class="grow">No meeting on this date.</span></div>' :
-      '<div class="scroll-x"><table class="ttable"><thead><tr><th>Patrol · reporters</th><th>They said</th><th>They came</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' +
+      (cancelled ? '<div class="banner bad">' + icon('calendar') + '<span class="grow">No réunion on this date.</span></div>' :
+      '<div class="scroll-x"><table class="ttable"><thead><tr><th>Patrol · CP / SP</th><th>They said</th><th>They came</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' +
       reasonList('Absent', listOf('sat', 'absent'), 'sat') +
       reasonList('Came late', listOf('sat', 'late'), 'sat') +
       reasonList('Said they would come but did not', noShows, 'sat') +
@@ -1764,7 +1783,7 @@ function openMemberHistory(id) {
     const r = rec(d, id) || {};
     const w = r.wedStatus ? statusMeta('wed', r.wedStatus) : null;
     const s = r.satStatus ? statusMeta('sat', r.satStatus) : null;
-    return '<tr><td class="num">' + esc(keyLabel(d)) + (isCancelled(d) ? '<div class="muted small">no meeting</div>' : '') + '</td>' +
+    return '<tr><td class="num">' + esc(keyLabel(d)) + (isCancelled(d) ? '<div class="muted small">no réunion</div>' : '') + '</td>' +
       '<td>' + (w ? '<span class="pill ' + w.tone + '">' + esc(w.label) + '</span>' + (r.wedReason ? '<div class="small muted">' + esc(r.wedReason) + '</div>' : '') : '<span class="muted">–</span>') + '</td>' +
       '<td>' + (s ? '<span class="pill ' + s.tone + '">' + esc(s.label) + '</span>' + (r.satReason ? '<div class="small muted">' + esc(r.satReason) + '</div>' : '') : '<span class="muted">–</span>') + '</td></tr>';
   }).join('');
@@ -1815,23 +1834,23 @@ function renderAdmin(v) {
     // camps & special events
     '<section class="card"><div class="card-head"><h2>Camps &amp; events</h2><button class="btn sm primary" id="addEv">' + icon('plus', 'sm') + 'New event</button></div>' +
       '<div class="card-body" style="padding-top:0;padding-bottom:4px">' + (evList || '<p class="empty">No camps or events.</p>') + '</div></section>' +
-    // reporters
-    '<section class="card"><div class="card-head"><h2>Reporters</h2><button class="btn sm primary" id="addRep">' + icon('plus', 'sm') + 'Add</button></div><div class="card-body" style="padding-top:0;padding-bottom:4px" id="repList"></div></section>' +
+    // accounts
+    '<section class="card"><div class="card-head"><h2>Accounts</h2><button class="btn sm primary" id="addRep">' + icon('plus', 'sm') + 'Add</button></div><div class="card-body" style="padding-top:0;padding-bottom:4px" id="repList"></div></section>' +
     '</div>' +
     '<div class="grid-2">' +
-    // patrol leaders
+    // CP & SP
     '<section class="card" id="leadersCard"></section>' +
     // settings
     '<section class="card"><div class="card-head"><h2>Rules &amp; season</h2></div><div class="card-body"><form id="setForm">' +
       '<label class="field">Troupe name<input class="input" name="teamName" maxlength="60" value="' + esc(set.teamName) + '"></label>' +
       '<label class="field">Season starts on<input class="input" type="date" name="seasonStart" value="' + esc(set.seasonStart) + '"></label>' +
-      '<label class="field">Red alert after missing … Saturdays in a row<input class="input" type="number" inputmode="numeric" min="1" max="20" name="streakAlert" value="' + set.streakAlert + '"></label>' +
-      '<label class="field">Start tracking percentages after … Saturdays<input class="input" type="number" inputmode="numeric" min="1" max="52" name="minMeetings" value="' + set.minMeetings + '"></label>' +
+      '<label class="field">Red alert after missing … réunions in a row<input class="input" type="number" inputmode="numeric" min="1" max="20" name="streakAlert" value="' + set.streakAlert + '"></label>' +
+      '<label class="field">Start tracking percentages after … réunions<input class="input" type="number" inputmode="numeric" min="1" max="52" name="minMeetings" value="' + set.minMeetings + '"></label>' +
       '<label class="field">Amber when attendance is under … %<input class="input" type="number" inputmode="numeric" min="1" max="100" name="warnPct" value="' + set.warnPct + '"></label>' +
       '<label class="field">Red when attendance is under … %<input class="input" type="number" inputmode="numeric" min="0" max="100" name="lowPct" value="' + set.lowPct + '"></label>' +
       '<button class="btn primary" type="submit" style="margin-top:16px">Save rules</button></form>' +
       '<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--hair)"><h3>Reminders</h3>' +
-        '<p class="sub">' + (S.data.reminders === true ? icon('check', 'sm') + ' On: Wednesday and Saturday at 5 pm to leaders who still have scouts to fill, again Thursday and Sunday if not done.'
+        '<p class="sub">' + (S.data.reminders === true ? icon('check', 'sm') + ' On: Wednesday and Saturday at 5 pm to the CP and SP who still have scouts to fill, again Thursday and Sunday if not done.'
           : 'Off. To switch them on, open the script in Apps Script, choose <b>setupReminders</b> next to ▷ Run, and click Run once.') + '</p>' +
         '<button class="btn sm" id="testPush" style="margin-top:10px">Send me a test notification</button></div>' +
       '</div></section>' +
@@ -1926,7 +1945,7 @@ function drawSyncResult(res) {
     '<div class="diff">' +
       '<div class="banner ' + (res.applied ? 'info' : changes ? 'warn' : 'info') + '">' + icon(res.applied ? 'check' : 'presence') + '<span class="grow">' +
         '<b>' + esc(res.fileName) + ' › ' + esc(res.sheetName) + '</b><br>' + res.members.length + ' scouts in ' + res.patrols.length + ' patrols, ' +
-        plural(d.leaders.length, 'leader') + ' (names in color) · ' +
+        d.leaders.filter(x => x.leader !== 'red').length + ' CP, ' + d.leaders.filter(x => x.leader === 'red').length + ' SP · ' +
         (res.applied ? 'imported.' : changes ? plural(changes, 'change') + ' to import.' : 'already up to date.') + '</span></div>' +
       '<div class="sum-pills">' + res.patrols.map(p => '<span class="pill"><span class="pdot" style="--pc:' + (S.patrolIdx.has(p) ? patrolColor(p) : 'var(--none)') + '"></span>' + esc(p) + ' <b>' + (counts[p] || 0) + '</b></span>').join('') + '</div>' +
       list('New', d.added, 'good') + list('Removed', d.removed, 'bad') + list('Changed patrol', d.moved, 'warn') +
@@ -1942,15 +1961,15 @@ function drawLeaders() {
   const hasAccount = new Set(S.data.reporters.map(r => nameKey(r.name)));
   const missing = leaders.filter(m => !hasAccount.has(nameKey(m.name)));
   el.innerHTML =
-    '<div class="card-head"><h2>Patrol leaders</h2><span class="pill accent">' + leaders.length + '</span></div><div class="card-body">' +
-    '<p class="sub" style="margin:0 0 10px">The names written in <b>green</b> or <b>red</b> in the members file. Each one reports for his own patrol.</p>' +
+    '<div class="card-head"><h2>CP &amp; SP</h2><span class="pill accent">' + leaders.length + '</span></div><div class="card-body">' +
+    '<p class="sub" style="margin:0 0 10px">Names written in <b>green</b> (CP) or <b>red</b> (SP) in the members file. Each one fills the attendance of his own patrol.</p>' +
     (leaders.length ? leaders.map(m =>
       '<div class="rep" style="--pc:' + patrolColor(m.patrol) + '"><span class="avatar">' + esc(initials(m.name)) + '</span><div class="grow"><b>' + esc(m.name) + '</b><div class="tags">' +
         '<span class="pill"><span class="pdot"></span>' + esc(m.patrol) + '</span>' +
-        '<span class="pill">' + esc(m.leader === 'green' ? 'Green' : m.leader === 'red' ? 'Red' : 'Colored') + '</span>' +
+        '<span class="pill">' + esc(m.leader === 'red' ? 'SP' : 'CP') + '</span>' +
         (hasAccount.has(nameKey(m.name)) ? '<span class="pill accent">' + icon('check', 'sm') + 'Has an account</span>' : '<span class="pill warn">No account yet</span>') +
       '</div></div></div>').join('') :
-      '<p class="muted">No leaders found yet. Import the members list (names in color = leaders).</p>') +
+      '<p class="muted">No CP or SP found yet. Write their names in green (CP) or red (SP) in the members file.</p>') +
     (missing.length ? '<button class="btn primary block" id="mkLeaders" style="margin-top:12px">' + icon('plus', 'sm') + 'Create ' + plural(missing.length, 'account') + ' with PINs</button>' : '') +
     '</div>';
   const btn = $('#mkLeaders', el);
@@ -1971,13 +1990,13 @@ function drawLeaders() {
 
 /** PINs are only shown this once (the server keeps them encrypted). */
 function showLeaderPins(created) {
-  if (!created.length) { toast('Every leader already has an account'); return; }
+  if (!created.length) { toast('Every CP and SP already has an account'); return; }
   const appUrl = window.HP_APP_URL || location.href.split(/[?#]/)[0];
   const message = (x) => S.data.settings.teamName + ' – HP App\n' + appUrl + '\nName: ' + x.name + '\nPIN: ' + x.pin;
   openModal(
     '<h2>' + plural(created.length, 'account') + ' created</h2>' +
-    '<div class="banner warn" style="margin-top:10px">' + icon('alert') + '<span class="grow">Send each leader his PIN <b>now</b>. They are shown only once. You can set a new PIN later with Edit.</span></div>' +
-    '<div class="scroll-x" style="margin-top:12px"><table class="ttable"><thead><tr><th>Leader</th><th>Patrol</th><th>PIN</th><th></th></tr></thead><tbody>' +
+    '<div class="banner warn" style="margin-top:10px">' + icon('alert') + '<span class="grow">Send each CP / SP his PIN <b>now</b>. They are shown only once. You can set a new PIN later with Edit.</span></div>' +
+    '<div class="scroll-x" style="margin-top:12px"><table class="ttable"><thead><tr><th>Name</th><th>Patrol</th><th>PIN</th><th></th></tr></thead><tbody>' +
       created.map((x, i) => '<tr><td><b>' + esc(x.name) + '</b></td><td>' + esc(x.patrol) + '</td><td class="num" style="font-size:17px;font-weight:700;letter-spacing:.08em">' + esc(x.pin) + '</td>' +
         '<td><button class="btn sm" data-share="' + i + '">Send</button></td></tr>').join('') +
     '</tbody></table></div>' +
@@ -2005,7 +2024,7 @@ function drawReporters() {
   const reps = S.data.reporters.slice().sort((a, b) => (a.role === b.role ? a.name.localeCompare(b.name) : a.role === 'admin' ? -1 : 1));
   el.innerHTML = reps.map(r =>
     '<div class="rep"><span class="avatar">' + esc(initials(r.name)) + '</span><div class="grow"><b>' + esc(r.name) + '</b><div class="tags">' +
-      (r.role === 'admin' ? '<span class="pill accent">Chief</span>' : '') +
+      '<span class="pill accent">' + roleLabel(r) + '</span>' +
       (r.patrols.length ? r.patrols.map(p => '<span class="pill"><span class="pdot" style="--pc:' + patrolColor(p) + '"></span>' + esc(p) + '</span>').join('') : '<span class="pill">All patrols</span>') +
     '</div></div><button class="btn sm" data-rep="' + esc(r.id) + '">Edit</button></div>').join('') ||
     '<p class="empty">No reporters yet.</p>';
@@ -2014,16 +2033,16 @@ function drawReporters() {
 
 function editReporter(r) {
   const isNew = !r;
-  r = r || { name: '', role: 'reporter', patrols: [] };
+  r = r || { name: '', role: 'cp', patrols: [] };
   const self = !isNew && r.id === S.data.me.id;
   openModal(
-    '<h2>' + (isNew ? 'Add a reporter' : 'Edit ' + esc(r.name)) + '</h2>' +
-    '<p class="sub">Reporters sign in with their name and PIN to fill the Presence tab.</p>' +
+    '<h2>' + (isNew ? 'Add an account' : 'Edit ' + esc(r.name)) + '</h2>' +
+    '<p class="sub">They sign in with their full name and PIN.</p>' +
     '<form id="repForm" style="margin-top:16px">' +
       '<label class="field">Name<input class="input" name="name" maxlength="60" required value="' + esc(r.name) + '"></label>' +
       '<label class="field">' + (isNew ? 'PIN (4 digits)' : 'New PIN (leave empty to keep the current one)') +
         '<input class="input" name="pin" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off"' + (isNew ? ' required' : '') + '></label>' +
-      '<label class="field">Role<select class="input" name="role"><option value="reporter">Reporter</option><option value="admin"' + (r.role === 'admin' ? ' selected' : '') + '>Chief (sees stats &amp; admin)</option></select></label>' +
+      '<label class="field">Role<select class="input" name="role">' + [['cp', 'CP'], ['sp', 'SP'], ['admin', 'Chief (sees stats &amp; admin)']].map(o => '<option value="' + o[0] + '"' + (roleKey(r) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></label>' +
       '<div class="field" style="margin-top:12px;font-size:13px;font-weight:600;color:var(--text-2)">In charge of (none ticked = all patrols)</div>' +
       '<div class="check-grid">' + S.data.patrols.map(p => '<label class="check"><input type="checkbox" name="patrols" value="' + esc(p) + '"' + (r.patrols.indexOf(p) >= 0 ? ' checked' : '') + '><span class="pdot" style="--pc:' + patrolColor(p) + '"></span>' + esc(p) + '</label>').join('') + '</div>' +
       '<p class="err" id="repErr"></p>' +
@@ -2043,7 +2062,7 @@ function editReporter(r) {
           close();
           drawReporters();
           drawLeaders();
-          toast(isNew ? 'Reporter added' : 'Saved');
+          toast(isNew ? 'Account added' : 'Saved');
           if (self) refresh(true);
         } catch (err) { $('#repErr', m).textContent = err.message; }
       };

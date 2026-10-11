@@ -82,7 +82,7 @@ ok(call('setMeeting', { date: '2026-10-24', cancelled: true, note: 'Holiday' }, 
 const bisonLead = st.reporters.find(r => r.patrols.join() === 'Bison');
 const bTok = ok(call('login', { name: bisonLead.name, pin: DEMO_PIN })).token;
 const bison = st.members.find(m => m.patrol === 'Bison');
-assert.match(call('saveAttendance', { entries: [{ date: '2026-10-24', memberId: bison.id, phase: 'wed', status: 'coming' }] }, bTok).error, /no meeting/);
+assert.match(call('saveAttendance', { entries: [{ date: '2026-10-24', memberId: bison.id, phase: 'wed', status: 'coming' }] }, bTok).error, /no réunion/);
 
 // Settings validation.
 assert.strictEqual(call('saveSettings', { lowPct: 90, warnPct: 80 }, token).ok, false);
@@ -127,10 +127,20 @@ const f2 = makeFakes({ source: source });
 const s2 = loadServer(code, f2);
 const c2 = (a, p, t) => ok(s2.api({ action: a, payload: p, token: t }));
 const t2 = c2('setup', { name: 'Chief', pin: '1234' }).token;
-assert.match(s2.api({ action: 'createLeaderAccounts', payload: {}, token: t2 }).error, /No patrol leaders/);
+assert.match(s2.api({ action: 'createLeaderAccounts', payload: {}, token: t2 }).error, /No CP or SP found/);
 c2('syncSource', { url: SOURCE_URL, apply: true }, t2);
 const made = c2('createLeaderAccounts', {}, t2);
 assert.strictEqual(made.created.length, 11);
+// Green name = CP, red name = SP.
+const roles2 = {};
+made.reporters.forEach(r => { roles2[r.name] = r.role; });
+made.created.forEach(x => assert.strictEqual(roles2[x.name], x.leader === 'red' ? 'sp' : 'cp'));
+assert.strictEqual(made.created.filter(x => roles2[x.name] === 'cp').length, 5);
+assert.strictEqual(made.created.filter(x => roles2[x.name] === 'sp').length, 6);
+const asSp = c2('saveReporter', { name: 'Extra Person', pin: '4321', role: 'sp', patrols: ['Panda'] }, t2);
+assert.strictEqual(asSp.reporters.find(r => r.name === 'Extra Person').role, 'sp');
+const odd = c2('saveReporter', { name: 'Odd Role', pin: '4321', role: 'reporter', patrols: [] }, t2);
+assert.strictEqual(odd.reporters.find(r => r.name === 'Odd Role').role, 'cp');
 assert.ok(made.created.every(x => /^\d{4}$/.test(x.pin)));
 c2('login', { name: made.created[0].name, pin: made.created[0].pin });
 

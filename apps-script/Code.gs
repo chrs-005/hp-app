@@ -246,7 +246,7 @@ function saveAttendance_(p, token) {
     if (scope && !scope[m.patrol]) throw new Error('You are not in charge of ' + m.name + '.');
     if (!STATUSES[e.phase]) throw new Error('Bad phase.');
     if (e.status && STATUSES[e.phase].indexOf(e.status) < 0) throw new Error('Bad status.');
-    if (cancelled[e.date] && me.role !== 'admin') throw new Error('There is no meeting on ' + e.date + '.');
+    if (cancelled[e.date] && me.role !== 'admin') throw new Error('There is no réunion on ' + e.date + '.');
   });
 
   return withLock_(() => {
@@ -359,7 +359,7 @@ function setMeeting_(p, token) {
 function saveReporter_(p, token) {
   requireAdmin_(token);
   const name = cleanName_(p.name);
-  const role = p.role === 'admin' ? 'admin' : 'reporter';
+  const role = ['admin', 'cp', 'sp'].indexOf(p.role) >= 0 ? p.role : 'cp';   // Chief, CP (green name) or SP (red name)
   const patrols = (Array.isArray(p.patrols) ? p.patrols : []).map(String).filter(Boolean);
   return withLock_(() => {
     const rows = readTable_('reporters').map(stripRow_);
@@ -369,7 +369,7 @@ function saveReporter_(p, token) {
     let r = p.id ? rows.find(x => x.id === p.id) : null;
     if (p.id && !r) throw new Error('Reporter not found.');
     if (!r) {
-      if (!p.pin) throw new Error('Choose a PIN for the new reporter.');
+      if (!p.pin) throw new Error('Choose a PIN for the new account.');
       r = { id: newId_('r'), createdAt: nowIso_() };
       rows.push(r);
     }
@@ -490,7 +490,7 @@ function moveDatabaseNextTo_(fileId) {
 function createLeaderAccounts_(p, token) {
   requireAdmin_(token);
   const leaders = readTable_('members').filter(m => m.active !== '0' && m.leader);
-  if (!leaders.length) throw new Error('No patrol leaders found. Write their names in color (green or red) in the members file and import it again.');
+  if (!leaders.length) throw new Error('No CP or SP found. Write their names in green (CP) or red (SP) in the members file.');
   return withLock_(() => {
     const rows = readTable_('reporters').map(stripRow_);
     const taken = {};
@@ -500,7 +500,7 @@ function createLeaderAccounts_(p, token) {
     leaders.forEach(m => {
       if (taken[memberId_(m.name)]) { existing.push({ name: m.name, patrol: m.patrol }); return; }
       const pin = randomPin_();
-      const r = { id: newId_('r'), name: m.name, role: 'reporter', patrols: m.patrol, createdAt: nowIso_() };
+      const r = { id: newId_('r'), name: m.name, role: m.leader === 'red' ? 'sp' : 'cp', patrols: m.patrol, createdAt: nowIso_() };
       r.pinHash = hash_(r.id + ':' + pin);
       rows.push(r);
       taken[memberId_(m.name)] = true;
@@ -941,7 +941,7 @@ function scopeOf_(me) {
 }
 
 function publicReporter_(r) {
-  return { id: r.id, name: r.name, role: r.role || 'reporter', patrols: r.patrols ? String(r.patrols).split(',').filter(Boolean) : [] };
+  return { id: r.id, name: r.name, role: r.role || 'cp', patrols: r.patrols ? String(r.patrols).split(',').filter(Boolean) : [] };
 }
 
 function cleanName_(name) {
