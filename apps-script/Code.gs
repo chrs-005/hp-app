@@ -134,8 +134,7 @@ function login_(p) {
     throw new Error('Wrong name or PIN.');
   }
   cache.remove(failKey);
-  // Easy PINs like 0000 are fine to hand out, but the person must pick their own now.
-  return { token: makeToken_(r.id), mustChangePin: isWeakPin_(pin) };
+  return { token: makeToken_(r.id) };
 }
 
 /** payload.sync = true forces a check of the members file in Drive (the ↻ button). */
@@ -478,7 +477,7 @@ function moveDatabaseNextTo_(fileId) {
 
 /**
  * Creates a reporter account for every patrol leader found in the members file
- * (names written in color) who does not have one yet. Each gets a random 6-digit
+ * (names written in color) who does not have one yet. Each gets a random 4-digit
  * PIN, returned only this once so the chief can send it.
  */
 function createLeaderAccounts_(p, token) {
@@ -508,7 +507,7 @@ function createLeaderAccounts_(p, token) {
 function randomPin_() {
   const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + secret_());
   let pin = '';
-  for (let i = 0; pin.length < 6; i++) pin += String((bytes[i] + 256) % 10);
+  for (let i = 0; pin.length < 4; i++) pin += String((bytes[i] + 256) % 10);
   return pin;
 }
 
@@ -715,20 +714,10 @@ function cleanName_(name) {
   return n;
 }
 
-/** 0000, 1111, 1234, 4321, 2468… — the first PINs anyone would try. */
-function isWeakPin_(pin) {
-  const p = String(pin || '');
-  if (/^(\d)\1+$/.test(p)) return true;
-  const d = p.split('').map(Number);
-  const step = d[1] - d[0];
-  return Math.abs(step) <= 2 && d.every((x, i) => i === 0 || x - d[i - 1] === step);
-}
-
 /** Anyone signed in: payload { pin (current), newPin }. */
 function changePin_(p, token) {
   const me = auth_(token);
   const newPin = cleanPin_(p.newPin);
-  if (isWeakPin_(newPin)) throw new Error('Too easy to guess. Avoid 0000, 1111, 1234…');
   return withLock_(() => {
     const r = readTable_('reporters').find(x => x.id === me.id);
     const current = String(p.pin || '').trim();
@@ -742,7 +731,7 @@ function changePin_(p, token) {
 
 function cleanPin_(pin) {
   const p = String(pin || '').trim();
-  if (!/^\d{4,8}$/.test(p)) throw new Error('The PIN must be 4 to 8 digits.');
+  if (!/^\d{4}$/.test(p)) throw new Error('The PIN must be 4 digits.');
   return p;
 }
 

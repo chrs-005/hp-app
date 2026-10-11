@@ -37,7 +37,7 @@ const { token } = seedDemo(server.api);
 const boot = ok(call('bootstrap'));
 assert.strictEqual(boot.needsSetup, false);
 assert.strictEqual(boot.reporters, undefined);           // no names leak before login
-assert.strictEqual(call('setup', { name: 'X', pin: '1111' }).ok, false);
+assert.strictEqual(call('setup', { name: 'X', pin: '1111' }).ok, false);   // already set up
 
 // Admin state.
 const st = ok(call('state', {}, token));
@@ -58,7 +58,7 @@ assert.strictEqual(again.existing.length, 11);
 
 // Login by typed name (case / accents / spaces ignored), scope and lockout.
 const lead = fauconLeads[0];
-assert.match(call('login', { name: lead.name, pin: '000000' }).error, /Wrong name or PIN/);
+assert.match(call('login', { name: lead.name, pin: '0000' }).error, /Wrong name or PIN/);
 assert.match(call('login', { name: 'Nobody Here', pin: DEMO_PIN }).error, /Wrong name or PIN/);
 const pTok = ok(call('login', { name: '  ' + lead.name.toUpperCase() + ' ', pin: DEMO_PIN })).token;
 const pst = ok(call('state', {}, pTok));
@@ -73,7 +73,7 @@ const saved = ok(call('saveAttendance', { entries: [{ date: '2026-10-17', member
 assert.strictEqual(saved.rows[0].satReason, 'Traffic');
 assert.strictEqual(saved.rows[0].satBy, lead.name);
 assert.strictEqual(call('saveSettings', { lowPct: 10 }, pTok).ok, false);
-for (let i = 0; i < 5; i++) call('login', { name: lead.name, pin: '999999' });
+for (let i = 0; i < 5; i++) call('login', { name: lead.name, pin: '9999' });
 assert.match(call('login', { name: lead.name, pin: DEMO_PIN }).error, /Too many/);
 assert.match(call('state', {}, 'bad.token.x').error, /AUTH/);
 
@@ -122,7 +122,7 @@ assert.notStrictEqual(reporters.getRange(rowIdx + 2, 3, 1, 1).getDisplayValues()
 assert.match(call('saveReporter', { id: st.me.id, name: DEMO_ADMIN, role: 'reporter', patrols: [] }, token).error, /at least one chief/);
 assert.match(call('deleteReporter', { id: st.me.id }, token).error, /yourself/);
 
-// Fresh install: leader accounts come with 6-digit PINs.
+// Fresh install: leader accounts come with 4-digit PINs.
 const f2 = makeFakes({ source: source });
 const s2 = loadServer(code, f2);
 const c2 = (a, p, t) => ok(s2.api({ action: a, payload: p, token: t }));
@@ -131,7 +131,7 @@ assert.match(s2.api({ action: 'createLeaderAccounts', payload: {}, token: t2 }).
 c2('syncSource', { url: SOURCE_URL, apply: true }, t2);
 const made = c2('createLeaderAccounts', {}, t2);
 assert.strictEqual(made.created.length, 11);
-assert.ok(made.created.every(x => /^\d{6}$/.test(x.pin)));
+assert.ok(made.created.every(x => /^\d{4}$/.test(x.pin)));
 c2('login', { name: made.created[0].name, pin: made.created[0].pin });
 
 // Standalone script: setup with the members link creates the DB, imports, and moves the DB next to the file.
@@ -191,20 +191,20 @@ assert.strictEqual(st5.attendance.filter(a => a.date === special).length, 0);
 c3('deleteEvent', { id: noel }, setup3.token);
 assert.strictEqual(c3('state', {}, setup3.token).events.length, 3);   // deleted camps do not come back
 
-// Extra chiefs with an easy PIN: equal rights, must pick their own PIN at first login.
+// Extra chiefs with PIN 0000: equal rights, sign in with name + PIN, any 4 digits allowed.
 ['Chief Two', 'Chief Three'].forEach(n => c3('saveReporter', { name: n, pin: '0000', role: 'admin', patrols: [] }, setup3.token));
 const two = c3('login', { name: 'chief two', pin: '0000' });
-assert.strictEqual(two.mustChangePin, true);
+assert.strictEqual(two.mustChangePin, undefined);
 const twoState = c3('state', {}, two.token);
 assert.strictEqual(twoState.me.role, 'admin');
 assert.ok(twoState.source && twoState.reporters.length >= 3);          // same access as the first chief
 c3('saveEvent', { title: 'Made by chief two' }, two.token);
-assert.match(s3.api({ action: 'changePin', payload: { pin: '0000', newPin: '1234' }, token: two.token }).error, /Too easy/);
-assert.match(s3.api({ action: 'changePin', payload: { pin: '9999', newPin: '582913' }, token: two.token }).error, /current PIN is wrong/);
-c3('changePin', { pin: '0000', newPin: '582913' }, two.token);
-assert.strictEqual(c3('login', { name: 'Chief Two', pin: '582913' }).mustChangePin, false);
+assert.match(s3.api({ action: 'saveReporter', payload: { name: 'Chief Four', pin: '12345', role: 'admin' }, token: two.token }).error, /4 digits/);
+assert.match(s3.api({ action: 'changePin', payload: { pin: '9999', newPin: '1111' }, token: two.token }).error, /current PIN is wrong/);
+c3('changePin', { pin: '0000', newPin: '1111' }, two.token);
+c3('login', { name: 'Chief Two', pin: '1111' });
 assert.strictEqual(s3.api({ action: 'login', payload: { name: 'Chief Two', pin: '0000' } }).ok, false);
-assert.strictEqual(c3('login', { name: 'Chief', pin: '1234' }).mustChangePin, true);   // 1234 counts as easy too
+
 // Setup with a bad link still creates the chief and reports the problem.
 const f4 = makeFakes({ source: source, standalone: true });
 const s4 = loadServer(code, f4);

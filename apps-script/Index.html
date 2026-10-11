@@ -864,7 +864,6 @@ function renderLogin() {
       const res = await call('login', { name: name, pin: pin });
       S.token = res.token;
       store.set('hp.lastName', name);
-      if (res.mustChangePin) { renderOwnPin(pin); return; }   // token is kept only once a real PIN is chosen
       store.set('hp.token', res.token);
       app.innerHTML = '<div class="loading"><div><div class="spinner"></div>Loading…</div></div>';
       await loadState();
@@ -876,35 +875,12 @@ function renderLogin() {
 }
 
 const pinFields = (prefix) =>
-  '<label class="field">New PIN (4–8 digits)<input class="input" id="' + prefix + 'New" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" required></label>' +
-  '<label class="field">Repeat the new PIN<input class="input" id="' + prefix + 'New2" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" required></label>';
-
-/** First sign-in with an easy PIN (0000, 1234…): choose a personal one before entering. */
-function renderOwnPin(oldPin) {
-  app.innerHTML = authFrame(
-    '<h1>Choose your own PIN</h1><p class="sub">You signed in with a temporary PIN. Pick a personal one that only you know (not 0000, 1111, 1234…).</p>' +
-    '<form id="ownPinForm">' + pinFields('op') + '<button class="btn primary block" type="submit">Save my PIN</button><p class="err" id="opErr"></p></form>');
-  $('#opNew').focus();
-  $('#ownPinForm').onsubmit = async (e) => {
-    e.preventDefault();
-    if ($('#opNew').value !== $('#opNew2').value) { $('#opErr').textContent = 'The two PINs are different.'; return; }
-    const btn = $('#ownPinForm button');
-    btn.disabled = true;
-    try {
-      await call('changePin', { pin: oldPin, newPin: $('#opNew').value });
-      store.set('hp.token', S.token);
-      toast('PIN saved');
-      await loadState();
-    } catch (err) {
-      $('#opErr').textContent = err.message;
-      btn.disabled = false;
-    }
-  };
-}
+  '<label class="field">New PIN (4 digits)<input class="input" id="' + prefix + 'New" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>' +
+  '<label class="field">Repeat the new PIN<input class="input" id="' + prefix + 'New2" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>';
 
 function openChangePin() {
   openModal('<h2>Change my PIN</h2><form id="cpForm" style="margin-top:14px">' +
-    '<label class="field">Current PIN<input class="input" id="cpOld" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="current-password" required></label>' +
+    '<label class="field">Current PIN<input class="input" id="cpOld" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="current-password" required></label>' +
     pinFields('cp') + '<p class="err" id="cpErr"></p>' +
     '<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button></div></form>', {
     onMount: (m, close) => {
@@ -926,8 +902,8 @@ function renderSetup() {
     '<h1>Welcome</h1><p class="sub">First time here. Create the chief account. Only the chief can see the statistics and manage the app.</p>' +
     '<form id="setupForm">' +
     '<label class="field">Your name<input class="input" id="suName" autocomplete="name" required maxlength="60"></label>' +
-    '<label class="field">Choose a PIN (4–8 digits)<input class="input" id="suPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" required></label>' +
-    '<label class="field">Repeat the PIN<input class="input" id="suPin2" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" required></label>' +
+    '<label class="field">Choose a PIN (4 digits)<input class="input" id="suPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="new-password" required></label>' +
+    '<label class="field">Repeat the PIN<input class="input" id="suPin2" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="new-password" required></label>' +
     '<label class="field">Link of your members file in Google Drive<input class="input" id="suSrc" inputmode="url" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…"></label>' +
     '<p class="muted small" style="margin-top:6px">The app stays connected to this file: when you change it in Drive, the app updates by itself.</p>' +
     '<button class="btn primary block" type="submit">Create chief account</button><p class="err" id="suErr"></p></form>');
@@ -1944,8 +1920,8 @@ function editReporter(r) {
     '<p class="sub">Reporters sign in with their name and PIN to fill the Presence tab.</p>' +
     '<form id="repForm" style="margin-top:16px">' +
       '<label class="field">Name<input class="input" name="name" maxlength="60" required value="' + esc(r.name) + '"></label>' +
-      '<label class="field">' + (isNew ? 'PIN (4–8 digits)' : 'New PIN (leave empty to keep the current one)') +
-        '<input class="input" name="pin" type="text" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="off"' + (isNew ? ' required' : '') + '></label>' +
+      '<label class="field">' + (isNew ? 'PIN (4 digits)' : 'New PIN (leave empty to keep the current one)') +
+        '<input class="input" name="pin" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off"' + (isNew ? ' required' : '') + '></label>' +
       '<label class="field">Role<select class="input" name="role"><option value="reporter">Reporter</option><option value="admin"' + (r.role === 'admin' ? ' selected' : '') + '>Chief (sees stats &amp; admin)</option></select></label>' +
       '<div class="field" style="margin-top:12px;font-size:13px;font-weight:600;color:var(--text-2)">In charge of (none ticked = all patrols)</div>' +
       '<div class="check-grid">' + S.data.patrols.map(p => '<label class="check"><input type="checkbox" name="patrols" value="' + esc(p) + '"' + (r.patrols.indexOf(p) >= 0 ? ' checked' : '') + '><span class="pdot" style="--pc:' + patrolColor(p) + '"></span>' + esc(p) + '</label>').join('') + '</div>' +
