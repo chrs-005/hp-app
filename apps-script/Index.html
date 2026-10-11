@@ -389,6 +389,20 @@ label.field + label.field { margin-top: 12px; }
 .gtable .gc.absent { background: var(--bad); color: #fff; font-weight: 700; }
 .gtable .gc.late { background: var(--warn); color: #3a2600; font-weight: 700; }
 .gtable .gc.said { color: var(--muted); font-style: italic; }
+.gtable .gc.absent.noshow { background: #7a1414; color: #fff; box-shadow: inset 0 0 0 2px #f2b8b8; }
+.gtable td[data-m] { cursor: pointer; }
+.noshow-pill { background: #7a1414; color: #fff; }
+.gtip {
+  position: fixed; z-index: 70; max-width: min(280px, calc(100vw - 16px)); padding: 10px 12px; border-radius: 12px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); box-shadow: 0 8px 28px rgba(0, 0, 0, .22);
+  font-size: 13px; line-height: 1.4; pointer-events: auto;
+}
+.gtip b { font-size: 14px; }
+.gtip-when { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.gtip-row { margin-bottom: 4px; }
+.gtip-reason { font-size: 14px; margin: 2px 0 6px; }
+.gtip-said { color: var(--text-2); font-size: 12.5px; }
+.gtip-said.bad { color: var(--bad-ink); font-weight: 700; }
 
 /* ---------- admin ---------- */
 .rep { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
@@ -1074,6 +1088,7 @@ function renderShell() {
 }
 
 function go(tabId, keepScroll) {
+  if (gridTipHide) gridTipHide();
   const tabs = visibleTabs();
   const tab = tabs.find(t => t.id === tabId) || tabs[0];
   S.tab = tab.id;
@@ -1529,15 +1544,18 @@ function renderOverview(v) {
   const years = Array.from(new Set(S.data.members.map(m => m.birthYear).filter(Boolean))).sort();
   const tint = (y) => (years.indexOf(y) < 0 ? 'transparent' : 'color-mix(in srgb, var(' + YEAR_TINTS[years.indexOf(y) % YEAR_TINTS.length] + ') 16%, var(--surface))');
 
+  // Cells with an answer open a small box with the reason (hover with a mouse, tap on a phone).
   const cell = (key, m) => {
     const r = rec(key, m.id) || {};
+    const data = ' data-k="' + esc(key) + '" data-m="' + esc(m.id) + '"';
     if (r.satStatus) {
       const s = statusMeta('sat', r.satStatus);
-      return '<td class="gc ' + r.satStatus + '" title="' + esc(s.label + (r.satReason ? ' – ' + r.satReason : '')) + '">' + esc(s.short) + '</td>';
+      const noShow = r.satStatus === 'absent' && (r.wedStatus === 'coming' || r.wedStatus === 'late');
+      return '<td class="gc ' + r.satStatus + (noShow ? ' noshow' : '') + '"' + data + '>' + (noShow ? '⚠ ' : '') + esc(s.short) + '</td>';
     }
     if (r.wedStatus) {
       const w = statusMeta('wed', r.wedStatus);
-      return '<td class="gc said" title="' + esc('They said: ' + w.label + (r.wedReason ? ' – ' + r.wedReason : '')) + '">said ' + esc(w.short.toLowerCase()) + '</td>';
+      return '<td class="gc said"' + data + '>said ' + esc(w.short.toLowerCase()) + '</td>';
     }
     return '<td class="gc"></td>';
   };
@@ -1549,7 +1567,9 @@ function renderOverview(v) {
     (patrols.length > 1 ? '<div class="chips">' + ['all'].concat(patrols).map(p =>
       '<button class="chip" data-gpatrol="' + esc(p) + '" aria-pressed="' + (O.patrol === p) + '" style="--pc:' + (p === 'all' ? 'var(--none)' : patrolColor(p)) + '">' +
       (p === 'all' ? 'All patrols' : '<span class="pdot"></span>' + esc(p)) + '</button>').join('') + '</div>' : '') +
-    '<div class="sum-pills"><span class="pill">Present</span><span class="pill warn">Late</span><span class="pill bad">Absent</span><span class="pill muted">said … = answer before, not filled after</span></div>' +
+    '<div class="sum-pills"><span class="pill">Present</span><span class="pill warn">Late</span><span class="pill bad">Absent</span>' +
+      '<span class="pill noshow-pill">⚠ Absent after saying he would come</span><span class="pill muted">said … = answer before, not filled after</span></div>' +
+    '<p class="muted small">' + (matchMedia('(hover: hover)').matches ? 'Hover' : 'Tap') + ' a cell to see the reason.</p>' +
     (members.length ? '<div class="grid-wrap card"><table class="gtable"><thead><tr>' +
       '<th class="gname">Name</th><th>Patrol</th><th>Year</th><th title="Réunions attended">%</th>' +
       cols.map(c => '<th class="' + (c.event ? 'gev' : '') + '"><div>' + esc(c.title) + '</div><small>' + esc(c.sub) + '</small></th>').join('') +
@@ -1566,6 +1586,7 @@ function renderOverview(v) {
       '</tbody></table></div>' : '<div class="card empty">No scouts to show.</div>');
 
   $$('[data-gpatrol]', v).forEach(b => { b.onclick = () => { O.patrol = b.dataset.gpatrol; renderOverview(v); }; });
+  wireGridTips(v, cols);
   $$('[data-member]', v).forEach(b => { b.onclick = () => openMemberHistory(b.dataset.member); });
   $('#gridCsv', v).onclick = () => {
     const q = (s) => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
@@ -1580,6 +1601,70 @@ function renderOverview(v) {
     downloadCsv(lines, 'overview-' + todayIso() + '.csv');
   };
 }
+
+/** The reason box of the Overview grid: hover (mouse) or tap (phone); tap elsewhere / scroll closes it. */
+function wireGridTips(v, cols) {
+  const wrap = $('.grid-wrap', v);
+  if (!wrap) return;
+  let tip = $('#gtip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'gtip';
+    tip.className = 'gtip hidden';
+    document.body.appendChild(tip);
+  }
+  let pinned = null;
+  const titleOf = (key) => { const c = cols.find(x => x.key === key); return c ? c.title + (c.sub ? ' · ' + c.sub : '') : ''; };
+  const show = (td) => {
+    const r = rec(td.dataset.k, td.dataset.m) || {};
+    const m = S.data.members.find(x => x.id === td.dataset.m);
+    const s = r.satStatus ? statusMeta('sat', r.satStatus) : null;
+    const w = r.wedStatus ? statusMeta('wed', r.wedStatus) : null;
+    const noShow = r.satStatus === 'absent' && w && (r.wedStatus === 'coming' || r.wedStatus === 'late');
+    let html = '<b>' + esc(m ? m.name : '') + '</b><div class="gtip-when">' + esc(titleOf(td.dataset.k)) + '</div>';
+    if (s) {
+      html += '<div class="gtip-row"><span class="pill ' + s.tone + '">' + esc(s.label) + '</span></div>';
+      if (s.reason) html += '<div class="gtip-reason">' + (r.satReason ? esc(r.satReason) : '<i>No reason given</i>') + '</div>';
+    }
+    if (w) {
+      html += '<div class="gtip-said' + (noShow ? ' bad' : '') + '">' + (noShow ? '⚠ ' : '') + 'They said: ' + esc(w.label) +
+        (r.wedReason ? ' – ' + esc(r.wedReason) : '') + '</div>';
+    } else if (s) {
+      html += '<div class="gtip-said">No answer before</div>';
+    }
+    tip.innerHTML = html;
+    tip.classList.remove('hidden');
+    const cr = td.getBoundingClientRect();
+    const tr = tip.getBoundingClientRect();
+    const left = Math.min(Math.max(8, cr.left + cr.width / 2 - tr.width / 2), innerWidth - tr.width - 8);
+    const top = cr.top - tr.height - 8 > 8 ? cr.top - tr.height - 8 : cr.bottom + 8;
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+  };
+  const hide = () => { tip.classList.add('hidden'); pinned = null; };
+  const hover = matchMedia('(hover: hover)').matches;
+  if (hover) {
+    wrap.addEventListener('mouseover', (e) => { const td = e.target.closest('td[data-m]'); if (td && !pinned) show(td); });
+    wrap.addEventListener('mouseout', (e) => { if (!pinned && !e.relatedTarget?.closest?.('td[data-m]')) hide(); });
+  }
+  wrap.addEventListener('click', (e) => {
+    const td = e.target.closest('td[data-m]');
+    if (!td) return;
+    e.stopPropagation();
+    if (pinned === td) { hide(); return; }
+    pinned = td;
+    show(td);
+  });
+  wrap.addEventListener('scroll', hide, { passive: true });
+  gridTipHide = hide;
+  if (!gridTipGlobal) {
+    gridTipGlobal = true;
+    window.addEventListener('scroll', () => gridTipHide && gridTipHide(), { passive: true });
+    document.addEventListener('click', (e) => { if (gridTipHide && !e.target.closest('#gtip')) gridTipHide(); });
+  }
+}
+let gridTipHide = null;
+let gridTipGlobal = false;
 
 function downloadCsv(lines, filename) {
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
