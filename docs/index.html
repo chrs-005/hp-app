@@ -237,6 +237,15 @@ label.field + label.field { margin-top: 12px; }
 /* ---------- presence ---------- */
 .pres-top { display: grid; gap: 10px; }
 @media (min-width: 900px) { .pres-top { grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); align-items: stretch; } }
+.seg-mode { max-width: 420px; }
+.seg-mode button[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.event-card { padding: 10px; min-width: 0; }
+.event-card .chip { min-height: 34px; padding: 0 12px; font-size: 13px; }
+.ev-now { display: flex; align-items: center; gap: 10px; padding: 8px 6px 2px; }
+.ev-now > div { flex: 1; min-width: 0; }
+.ev-now .dl-rel, .date-label .dl-rel { font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--accent-text); }
+.ev-now .dl-main { font-size: 17px; font-weight: 700; }
+.pres-top > * { min-width: 0; }
 .date-card { display: flex; align-items: center; gap: 4px; padding: 6px; }
 .date-label { flex: 1; text-align: center; min-width: 0; }
 .date-label .dl-rel { font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--accent-text); }
@@ -358,6 +367,25 @@ label.field + label.field { margin-top: 12px; }
 .reason-list div { display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
 .reason-list div .muted { font-size: 13px; }
 
+/* ---------- overview grid ---------- */
+.grid-wrap { overflow: auto; max-height: max(380px, calc(100vh - 260px)); max-height: max(380px, calc(100dvh - 260px)); -webkit-overflow-scrolling: touch; }
+@media (max-width: 899px) { .grid-wrap { max-height: max(380px, calc(100dvh - var(--tabbar-h) - var(--safe-b) - 250px)); } }
+.gtable { border-collapse: separate; border-spacing: 0; font-size: 12.5px; min-width: 100%; }
+.gtable th, .gtable td { padding: 6px 8px; border-bottom: 1px solid var(--hair); border-right: 1px solid var(--hair); white-space: nowrap; text-align: left; }
+.gtable thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); font-size: 12px; font-weight: 700; vertical-align: bottom; }
+.gtable thead th small { display: block; font-weight: 500; color: var(--muted); }
+.gtable thead th.gev { background: color-mix(in srgb, var(--accent) 14%, var(--surface-2)); }
+.gtable tbody tr { background: var(--rt, transparent); }
+.gtable .gname { position: sticky; left: 0; z-index: 1; background: var(--surface); min-width: 130px; max-width: 170px; }
+.gtable tbody .gname { background: var(--surface); background-image: linear-gradient(var(--rt), var(--rt)); }
+.gtable thead .gname { z-index: 3; background: var(--surface-2); }
+.gtable .gname button { border: 0; background: none; padding: 0; font-weight: 650; font-size: 13px; text-align: left; white-space: normal; color: var(--text); }
+.gtable .gmeta { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.gtable .gc { min-width: 74px; }
+.gtable .gc.absent { background: var(--bad); color: #fff; font-weight: 700; }
+.gtable .gc.late { background: var(--warn); color: #3a2600; font-weight: 700; }
+.gtable .gc.said { color: var(--muted); font-style: italic; }
+
 /* ---------- admin ---------- */
 .rep { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
 .rep + .rep { border-top: 1px solid var(--hair); }
@@ -451,6 +479,7 @@ const ICONS = {
   alert: '<path d="M12 4 2.8 19.5h18.4zM12 10v4.2M12 17.2v.1"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  grid: '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 3.5v17"/>',
   download: '<path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/>',
 };
 const icon = (name, cls) => '<svg class="ic ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + ICONS[name] + '</svg>';
@@ -560,6 +589,7 @@ const S = {
 
 function indexData() {
   const D = S.data;
+  D.events = D.events || [];   // older server version without camps / events
   S.att = new Map();
   D.attendance.forEach(a => S.att.set(a.date + '|' + a.memberId, a));
   S.patrolIdx = new Map(D.patrols.map((p, i) => [p, i]));
@@ -590,7 +620,7 @@ function computeStats() {
   const today = todayIso();
   const heldSet = new Set();
   S.data.attendance.forEach(a => {
-    if (a.satStatus && a.date >= set.seasonStart && a.date <= today && !isCancelled(a.date)) heldSet.add(a.date);
+    if (a.satStatus && !isEventKey(a.date) && a.date >= set.seasonStart && a.date <= today && !isCancelled(a.date)) heldSet.add(a.date);
   });
   const held = Array.from(heldSet).sort();
   const tracking = held.length >= set.minMeetings;
@@ -886,6 +916,7 @@ function renderSetup() {
 const TABS = [
   { id: 'home', label: 'Home', icon: 'home', render: renderHome },
   { id: 'presence', label: 'Presence', icon: 'presence', render: renderPresence },
+  { id: 'overview', label: 'Overview', icon: 'grid', render: renderOverview },
   { id: 'stats', label: 'Stats', icon: 'stats', render: renderStats, admin: true },
   { id: 'admin', label: 'Admin', icon: 'admin', render: renderAdmin, admin: true },
 ];
@@ -957,11 +988,11 @@ function renderHome(v) {
 
   html += '<div class="grid-2">';
   html += '<section class="card"><div class="card-head"><h2>' + esc(fmtLong(next)) + '</h2><span class="pill accent">' + relLabel(next) + '</span></div><div class="card-body" style="padding-top:4px;padding-bottom:4px">' +
-    (isCancelled(next) ? '<p class="empty">No meeting this Saturday.</p>' : step(next, 'wed', 'Wednesday · who is coming?') + step(next, 'sat', 'Saturday · who came?')) + '</div></section>';
+    (isCancelled(next) ? '<p class="empty">No meeting this Saturday.</p>' : step(next, 'wed', 'They said · by Wednesday') + step(next, 'sat', 'They came · on Saturday')) + '</div></section>';
 
   if (lastMissing > 0 && !isCancelled(last) && last >= S.data.settings.seasonStart) {
     html += '<section class="card"><div class="card-head"><h2>' + esc(fmtLong(last)) + '</h2><span class="pill warn">' + plural(lastMissing, 'scout') + ' not marked</span></div><div class="card-body" style="padding-top:4px;padding-bottom:4px">' +
-      step(last, 'sat', 'Saturday · who came?') + '</div></section>';
+      step(last, 'sat', 'They came · on Saturday') + '</div></section>';
   }
 
   const stats = computeStats();
@@ -980,6 +1011,7 @@ function renderHome(v) {
   $$('[data-go]', v).forEach(b => {
     b.onclick = () => {
       const parts = b.dataset.go.split('|');
+      S.presence.mode = 'reunion';
       S.presence.date = parts[0];
       S.presence.phase = parts[1];
       go('presence');
@@ -998,22 +1030,76 @@ function attItem(r) {
 }
 
 // =================================================================== PRESENCE
+/** Attendance key of what is open in Presence: a réunion date, or a camp / event id. */
+function pkey() {
+  const P = S.presence;
+  return P.mode === 'event' ? P.eventId : P.date;
+}
+const findEvent = (id) => S.data.events.find(e => e.id === id);
+const isEventKey = (k) => !/^\d{4}-\d{2}-\d{2}$/.test(k);
+/** Label of a réunion date or an event, for lists and reports. */
+function keyLabel(k) {
+  if (!isEventKey(k)) return 'Réunion · ' + fmtMed(k);
+  const ev = findEvent(k);
+  return ev ? ev.title : 'Deleted event';
+}
+function eventDates(ev) {
+  if (!ev.date) return 'No date yet';
+  if (!ev.endDate || ev.endDate === ev.date) return fmtMed(ev.date);
+  return fmtShort(ev.date) + ' → ' + fmtMed(ev.endDate);
+}
+/** The two moments of every réunion / camp: what they answered before, what really happened. */
+function phaseText(phase) {
+  const P = S.presence;
+  const ev = P.mode === 'event' ? findEvent(P.eventId) : null;
+  const word = ev && ev.kind === 'camp' ? 'camp' : 'event';
+  if (phase === 'wed') return { title: 'They said', sub: ev ? 'Before the ' + word : 'By Wednesday' };
+  return { title: 'They came', sub: ev ? 'At the ' + word : 'On Saturday' };
+}
+function defaultEventPhase(ev) {
+  return ev && ev.date && ev.date <= todayIso() ? 'sat' : 'wed';
+}
+
 function renderPresence(v) {
   const P = S.presence;
+  if (!P.mode) P.mode = 'reunion';
   if (!P.date) Object.assign(P, defaultMeeting());
+  if (P.mode === 'event' && !findEvent(P.eventId)) {
+    const evs = S.data.events;
+    const next = evs.filter(e => e.date && (e.endDate || e.date) >= todayIso()).sort((a, b) => a.date.localeCompare(b.date))[0];
+    const ev = next || evs[0];
+    if (!ev) P.mode = 'reunion';
+    else { P.eventId = ev.id; P.phase = defaultEventPhase(ev); }
+  }
   const patrols = myPatrols();
   if (P.patrol !== 'all' && patrols.indexOf(P.patrol) < 0) P.patrol = 'all';
+  const ev = P.mode === 'event' ? findEvent(P.eventId) : null;
 
-  v.innerHTML =
-    '<div class="pres-top">' +
-      '<div class="card date-card">' +
+  const whenCard = ev
+    ? '<div class="card event-card">' +
+        '<div class="chips">' + S.data.events.map(e =>
+          '<button class="chip" data-event="' + esc(e.id) + '" aria-pressed="' + (e.id === ev.id) + '">' + esc(e.title) + '</button>').join('') +
+          (isAdmin() ? '<button class="chip" data-event-new>' + icon('plus', 'sm') + 'New event</button>' : '') + '</div>' +
+        '<div class="ev-now"><div><div class="dl-rel">' + (ev.kind === 'camp' ? 'Camp' : 'Special event') + '</div><div class="dl-main">' + esc(ev.title) + '</div>' +
+          '<div class="muted small">' + esc(eventDates(ev)) + '</div></div>' +
+          (isAdmin() ? '<button class="btn sm" data-event-edit>Edit</button>' : '') + '</div>' +
+      '</div>'
+    : '<div class="card date-card">' +
         '<button class="icon-btn" data-step="-7" aria-label="Previous Saturday">' + icon('left') + '</button>' +
         '<div class="date-label"><div class="dl-rel">' + relLabel(P.date) + '</div><div class="dl-main">' + esc(fmtLong(P.date)) + '</div></div>' +
         '<button class="icon-btn" data-step="7" aria-label="Next Saturday">' + icon('right') + '</button>' +
-      '</div>' +
-      '<div class="seg seg-phase" role="tablist">' +
-        '<button role="tab" data-phase="wed" aria-selected="' + (P.phase === 'wed') + '">Wednesday<small>Who is coming?</small></button>' +
-        '<button role="tab" data-phase="sat" aria-selected="' + (P.phase === 'sat') + '">Saturday<small>Who came?</small></button>' +
+      '</div>';
+
+  v.innerHTML =
+    '<div class="seg seg-mode" role="tablist">' +
+      '<button role="tab" data-mode="reunion" aria-selected="' + (P.mode === 'reunion') + '">Réunions</button>' +
+      '<button role="tab" data-mode="event" aria-selected="' + (P.mode === 'event') + '">Camps &amp; events</button>' +
+    '</div>' +
+    '<div class="pres-top">' + whenCard +
+      '<div class="seg seg-phase" role="tablist">' + ['wed', 'sat'].map(ph => {
+        const t = phaseText(ph);
+        return '<button role="tab" data-phase="' + ph + '" aria-selected="' + (P.phase === ph) + '">' + t.title + '<small>' + t.sub + '</small></button>';
+      }).join('') +
       '</div>' +
     '</div>' +
     '<div id="presBanner"></div>' +
@@ -1026,6 +1112,22 @@ function renderPresence(v) {
   $$('[data-step]', v).forEach(b => { b.onclick = () => { P.date = addDays(P.date, Number(b.dataset.step)); renderPresence(v); }; });
   $$('[data-phase]', v).forEach(b => { b.onclick = () => { P.phase = b.dataset.phase; renderPresence(v); }; });
   $$('[data-patrol]', v).forEach(b => { b.onclick = () => { P.patrol = b.dataset.patrol; renderPresence(v); }; });
+  $$('[data-mode]', v).forEach(b => {
+    b.onclick = () => {
+      if (P.mode === b.dataset.mode) return;
+      P.mode = b.dataset.mode;
+      if (P.mode === 'reunion') Object.assign(P, defaultMeeting(), { mode: 'reunion' });
+      else P.eventId = null;
+      renderPresence(v);
+    };
+  });
+  $$('[data-event]', v).forEach(b => {
+    b.onclick = () => { P.eventId = b.dataset.event; P.phase = defaultEventPhase(findEvent(P.eventId)); renderPresence(v); };
+  });
+  if ($('[data-event-new]', v)) $('[data-event-new]', v).onclick = () => editEvent(null, (id) => { P.eventId = id; renderPresence(v); });
+  if ($('[data-event-edit]', v)) $('[data-event-edit]', v).onclick = () => editEvent(ev, () => renderPresence(v));
+  const chosen = $('.event-card .chip[aria-pressed="true"]', v);
+  if (chosen) chosen.scrollIntoView({ block: 'nearest', inline: 'center' });
 
   const list = $('#presList', v);
   list.addEventListener('click', (e) => {
@@ -1033,10 +1135,11 @@ function renderPresence(v) {
     if (!btn || btn.disabled) return;
     const row = btn.closest('.mrow');
     const id = row.dataset.id;
-    const cur = (rec(P.date, id) || {})[P.phase + 'Status'] || '';
+    const key = pkey();
+    const cur = (rec(key, id) || {})[P.phase + 'Status'] || '';
     const next = cur === btn.dataset.st ? '' : btn.dataset.st;   // tap again to clear
     const input = $('.reason', row);
-    setAnswer(P.date, id, P.phase, next, input ? input.value : ((rec(P.date, id) || {})[P.phase + 'Reason'] || ''));
+    setAnswer(key, id, P.phase, next, input ? input.value : ((rec(key, id) || {})[P.phase + 'Reason'] || ''));
     redrawRow(id);
     drawSummary();
   });
@@ -1045,7 +1148,7 @@ function renderPresence(v) {
     if (!e.target.classList.contains('reason')) return;
     const id = e.target.closest('.mrow').dataset.id;
     const value = e.target.value;
-    const date = P.date;
+    const date = pkey();
     const phase = P.phase;
     clearTimeout(reasonTimers[id]);
     reasonTimers[id] = setTimeout(() => {
@@ -1065,7 +1168,7 @@ function presenceMembers() {
   return activeMembers(patrols);
 }
 function presenceLocked() {
-  return isCancelled(S.presence.date) && !isAdmin();
+  return S.presence.mode === 'reunion' && isCancelled(S.presence.date) && !isAdmin();
 }
 
 function drawBanner() {
@@ -1073,7 +1176,12 @@ function drawBanner() {
   const el = $('#presBanner');
   const m = S.meetingByDate.get(P.date);
   let html = '';
-  if (m && m.cancelled) {
+  if (P.mode === 'event') {
+    const ev = findEvent(P.eventId);
+    if (P.phase === 'sat' && ev && ev.date && ev.date > todayIso()) {
+      html = '<div class="banner warn">' + icon('clock') + '<span class="grow">This has not happened yet. Fill "They came" during or after it.</span></div>';
+    }
+  } else if (m && m.cancelled) {
     html = '<div class="banner bad">' + icon('calendar') + '<span class="grow"><b>No meeting this Saturday</b>' + (m.note ? ' — ' + esc(m.note) : '') + '</span>' +
       (isAdmin() ? '<button class="btn sm" data-meeting="open">Undo</button>' : '') + '</div>';
   } else if (P.phase === 'sat' && P.date > todayIso()) {
@@ -1085,6 +1193,51 @@ function drawBanner() {
   el.classList.toggle('hidden', !html);
   const undo = $('[data-meeting="open"]', el);
   if (undo) undo.onclick = () => setMeetingCancelled(P.date, false, '');
+}
+
+/** Create (ev = null) or edit a camp / special event. onSaved(id) after saving. */
+function editEvent(ev, onSaved) {
+  const isNew = !ev;
+  ev = ev || { title: '', date: '', endDate: '', kind: 'special' };
+  openModal(
+    '<h2>' + (isNew ? 'New special event' : 'Edit ' + esc(ev.title)) + '</h2>' +
+    '<p class="sub">' + (isNew ? 'Any day that is not a normal Saturday réunion: outing, service, ceremony… It shows next to the camps.' : 'Dates are optional.') + '</p>' +
+    '<form id="evForm" style="margin-top:14px">' +
+      '<label class="field">Name<input class="input" name="title" maxlength="60" required value="' + esc(ev.title) + '" placeholder="e.g. Sortie, Jamboree, Messe"></label>' +
+      '<div class="grid-2" style="margin-top:12px"><label class="field">Starts<input class="input" type="date" name="date" value="' + esc(ev.date) + '"></label>' +
+      '<label class="field">Ends (optional)<input class="input" type="date" name="endDate" value="' + esc(ev.endDate) + '"></label></div>' +
+      '<p class="err" id="evErr"></p>' +
+      '<div class="modal-actions">' + (!isNew ? '<button type="button" class="btn danger" id="evDel">Delete</button><span class="spacer"></span>' : '') +
+        '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button></div>' +
+    '</form>', {
+    onMount: (m, close) => {
+      const f = $('#evForm', m);
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          const res = await call('saveEvent', { id: ev.id, title: f.elements.title.value, date: f.elements.date.value, endDate: f.elements.endDate.value });
+          S.data.events = res.events;
+          close();
+          toast(isNew ? 'Event created' : 'Saved');
+          if (onSaved) onSaved(res.id);
+        } catch (err) { $('#evErr', m).textContent = err.message; }
+      };
+      const del = $('#evDel', m);
+      if (del) del.onclick = async () => {
+        close();
+        if (!await confirmBox('Delete ' + ev.title + '?', 'Everything filled for it (who said, who came) is deleted too.', 'Delete', true)) return;
+        try {
+          const res = await call('deleteEvent', { id: ev.id });
+          S.data.events = res.events;
+          S.data.attendance = S.data.attendance.filter(a => a.date !== ev.id);
+          indexData();
+          toast('Deleted');
+          if (S.presence.eventId === ev.id) S.presence.eventId = null;
+          go(S.tab, true);
+        } catch (err) { toast(err.message, 'bad'); }
+      };
+    },
+  });
 }
 
 async function setMeetingCancelled(date, cancelled, note) {
@@ -1105,7 +1258,7 @@ function drawSummary() {
   opts.forEach(o => { counts[o.k] = 0; });
   let filled = 0;
   members.forEach(m => {
-    const st = (rec(P.date, m.id) || {})[P.phase + 'Status'];
+    const st = (rec(pkey(), m.id) || {})[P.phase + 'Status'];
     if (st) { filled++; counts[st]++; }
   });
   const missing = members.length - filled;
@@ -1123,10 +1276,10 @@ function drawSummary() {
 
   if (P.phase === 'sat') {
     const w = { coming: 0, late: 0, out: 0 };
-    members.forEach(m => { const s = (rec(P.date, m.id) || {}).wedStatus; if (s in w) w[s]++; });
-    if (w.coming + w.late + w.out) html += '<p class="sum-note">On Wednesday: ' + w.coming + ' said coming, ' + w.late + ' late, ' + w.out + ' not coming.</p>';
+    members.forEach(m => { const s = (rec(pkey(), m.id) || {}).wedStatus; if (s in w) w[s]++; });
+    if (w.coming + w.late + w.out) html += '<p class="sum-note">They said: ' + w.coming + ' coming, ' + w.late + ' late, ' + w.out + ' not coming.</p>';
   }
-  if (isAdmin() && !isCancelled(P.date)) {
+  if (isAdmin() && P.mode === 'reunion' && !isCancelled(P.date)) {
     html += '<p class="sum-note"><button class="btn ghost sm" style="padding-left:0" data-meeting="cancel">' + icon('calendar', 'sm') + 'No meeting this Saturday?</button></p>';
   }
   const el = $('#presSummary');
@@ -1136,7 +1289,7 @@ function drawSummary() {
     const st = bulk.dataset.bulk;
     const label = statusMeta(P.phase, st).label;
     if (!await confirmBox('Mark the rest?', 'The ' + plural(missing, 'scout') + ' not filled yet will be marked <b>' + esc(label) + '</b>.', 'Mark ' + missing)) return;
-    members.forEach(m => { if (!(rec(P.date, m.id) || {})[P.phase + 'Status']) setAnswer(P.date, m.id, P.phase, st, ''); });
+    members.forEach(m => { if (!(rec(pkey(), m.id) || {})[P.phase + 'Status']) setAnswer(pkey(), m.id, P.phase, st, ''); });
     drawList();
     drawSummary();
   };
@@ -1151,7 +1304,7 @@ function drawSummary() {
   // keep patrol counters in the list headers in sync
   $$('[data-pcount]').forEach(c => {
     const ms = members.filter(m => m.patrol === c.dataset.pcount);
-    c.textContent = ms.filter(m => (rec(P.date, m.id) || {})[P.phase + 'Status']).length + '/' + ms.length;
+    c.textContent = ms.filter(m => (rec(pkey(), m.id) || {})[P.phase + 'Status']).length + '/' + ms.length;
   });
 }
 
@@ -1170,7 +1323,7 @@ function drawList() {
     g.members.push(m);
   });
   el.innerHTML = groups.map(g => {
-    const n = g.members.filter(m => (rec(P.date, m.id) || {})[P.phase + 'Status']).length;
+    const n = g.members.filter(m => (rec(pkey(), m.id) || {})[P.phase + 'Status']).length;
     return '<section class="card pcard" style="--pc:' + patrolColor(g.patrol) + '">' +
       '<header class="pc-head"><span class="pdot"></span><h3>' + esc(g.patrol) + '</h3><span class="pc-count" data-pcount="' + esc(g.patrol) + '">' + n + '/' + g.members.length + '</span></header>' +
       g.members.map(rowHtml).join('') + '</section>';
@@ -1179,7 +1332,7 @@ function drawList() {
 
 function rowHtml(m) {
   const P = S.presence;
-  const r = rec(P.date, m.id) || {};
+  const r = rec(pkey(), m.id) || {};
   const st = r[P.phase + 'Status'] || '';
   const meta = statusMeta(P.phase, st);
   const locked = presenceLocked();
@@ -1187,7 +1340,7 @@ function rowHtml(m) {
   let extra = '';
   if (P.phase === 'sat' && r.wedStatus) {
     const w = statusMeta('wed', r.wedStatus);
-    extra += '<span class="pill ' + w.tone + '" title="Wednesday answer">Wed: ' + esc(w.label) + (r.wedReason ? ' · ' + esc(r.wedReason) : '') + '</span>';
+    extra += '<span class="pill ' + w.tone + '" title="What they said before">Said: ' + esc(w.label) + (r.wedReason ? ' · ' + esc(r.wedReason) : '') + '</span>';
   }
   if (stat && stat.streakAlert) extra += '<span class="pill alert-pill glow">' + icon('alert', 'sm') + 'Missed ' + stat.absStreak + ' in a row</span>';
   return '<div class="mrow ' + (locked ? 'locked' : '') + '" data-id="' + esc(m.id) + '">' +
@@ -1212,6 +1365,87 @@ function redrawRow(id) {
   const tmp = document.createElement('div');
   tmp.innerHTML = rowHtml(m);
   old.replaceWith(tmp.firstChild);
+}
+
+// =================================================================== OVERVIEW (grid like the Excel register)
+function overviewColumns() {
+  const held = computeStats().held;
+  return S.data.events.map(e => ({ key: e.id, title: e.title, sub: e.date ? fmtShort(e.date) : '', event: e }))
+    .concat(held.map((d, i) => ({ key: d, title: 'Réunion ' + (i + 1), sub: fmtShort(d) })));
+}
+
+const YEAR_TINTS = ['--p8', '--p1', '--p6', '--p4', '--p7', '--p2', '--p3', '--p5'];
+
+function renderOverview(v) {
+  const O = S.overview || (S.overview = { patrol: 'all' });
+  const patrols = myPatrols();
+  if (O.patrol !== 'all' && patrols.indexOf(O.patrol) < 0) O.patrol = 'all';
+  const members = activeMembers(O.patrol === 'all' ? patrols : [O.patrol]);
+  const cols = overviewColumns();
+  const stats = computeStats();
+  const years = Array.from(new Set(S.data.members.map(m => m.birthYear).filter(Boolean))).sort();
+  const tint = (y) => (years.indexOf(y) < 0 ? 'transparent' : 'color-mix(in srgb, var(' + YEAR_TINTS[years.indexOf(y) % YEAR_TINTS.length] + ') 16%, var(--surface))');
+
+  const cell = (key, m) => {
+    const r = rec(key, m.id) || {};
+    if (r.satStatus) {
+      const s = statusMeta('sat', r.satStatus);
+      return '<td class="gc ' + r.satStatus + '" title="' + esc(s.label + (r.satReason ? ' – ' + r.satReason : '')) + '">' + esc(s.short) + '</td>';
+    }
+    if (r.wedStatus) {
+      const w = statusMeta('wed', r.wedStatus);
+      return '<td class="gc said" title="' + esc('They said: ' + w.label + (r.wedReason ? ' – ' + r.wedReason : '')) + '">said ' + esc(w.short.toLowerCase()) + '</td>';
+    }
+    return '<td class="gc"></td>';
+  };
+
+  v.innerHTML =
+    '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>Overview</h1>' +
+      '<p class="sub">Every scout, every camp and réunion. Tap a name for details.</p></div>' +
+      '<button class="btn sm" id="gridCsv">' + icon('download', 'sm') + 'Export CSV</button></div>' +
+    (patrols.length > 1 ? '<div class="chips">' + ['all'].concat(patrols).map(p =>
+      '<button class="chip" data-gpatrol="' + esc(p) + '" aria-pressed="' + (O.patrol === p) + '" style="--pc:' + (p === 'all' ? 'var(--none)' : patrolColor(p)) + '">' +
+      (p === 'all' ? 'All patrols' : '<span class="pdot"></span>' + esc(p)) + '</button>').join('') + '</div>' : '') +
+    '<div class="sum-pills"><span class="pill">Present</span><span class="pill warn">Late</span><span class="pill bad">Absent</span><span class="pill muted">said … = answer before, not filled after</span></div>' +
+    (members.length ? '<div class="grid-wrap card"><table class="gtable"><thead><tr>' +
+      '<th class="gname">Name</th><th>Patrol</th><th>Year</th><th title="Réunions attended">%</th>' +
+      cols.map(c => '<th class="' + (c.event ? 'gev' : '') + '"><div>' + esc(c.title) + '</div><small>' + esc(c.sub) + '</small></th>').join('') +
+      '</tr></thead><tbody>' +
+      members.map(m => {
+        const st = stats.byId.get(m.id);
+        const pctCls = st && st.pctLevel === 'low' ? 'pct-low' : st && st.pctLevel === 'warn' ? 'pct-warn' : '';
+        return '<tr style="--rt:' + tint(m.birthYear) + '">' +
+          '<th class="gname" scope="row"><button data-member="' + esc(m.id) + '">' + esc(m.name) + (m.leader ? ' <span class="muted">★</span>' : '') + '</button></th>' +
+          '<td class="gmeta">' + esc(m.patrol) + '</td><td class="gmeta">' + esc(m.birthYear) + '</td>' +
+          '<td class="gmeta ' + pctCls + (st && st.streakAlert ? ' glow-text' : '') + '">' + pctText(st ? st.pct : null) + '</td>' +
+          cols.map(c => cell(c.key, m)).join('') + '</tr>';
+      }).join('') +
+      '</tbody></table></div>' : '<div class="card empty">No scouts to show.</div>');
+
+  $$('[data-gpatrol]', v).forEach(b => { b.onclick = () => { O.patrol = b.dataset.gpatrol; renderOverview(v); }; });
+  $$('[data-member]', v).forEach(b => { b.onclick = () => openMemberHistory(b.dataset.member); });
+  $('#gridCsv', v).onclick = () => {
+    const q = (s) => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
+    const lines = [['Name', 'Patrol', 'Year', '%'].concat(cols.map(c => c.title + (c.sub ? ' (' + c.sub + ')' : ''))).map(q).join(',')]
+      .concat(members.map(m => {
+        const st = stats.byId.get(m.id);
+        return [m.name, m.patrol, m.birthYear, st && st.pct != null ? Math.round(st.pct) : ''].concat(cols.map(c => {
+          const r = rec(c.key, m.id) || {};
+          return r.satStatus ? statusMeta('sat', r.satStatus).label : r.wedStatus ? 'said ' + statusMeta('wed', r.wedStatus).label : '';
+        })).map(q).join(',');
+      }));
+    downloadCsv(lines, 'overview-' + todayIso() + '.csv');
+  };
+}
+
+function downloadCsv(lines, filename) {
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 // =================================================================== STATS (chief)
@@ -1280,8 +1514,9 @@ function renderStats(v) {
       (sorted.length ? sorted.map(statRow).join('') : '<p class="empty">No scouts.</p>') +
     '</div></section>';
 
-  // Saturday report
-  const dates = Array.from(new Set(S.data.attendance.map(a => a.date).concat(S.data.meetings.map(m => m.date)))).sort().reverse();
+  // Report of one réunion / camp / event
+  const dates = Array.from(new Set(S.data.attendance.map(a => a.date).filter(k => !isEventKey(k)).concat(S.data.meetings.map(m => m.date))))
+    .sort().reverse().concat(S.data.events.map(e => e.id));
   if (!st.meeting || dates.indexOf(st.meeting) < 0) st.meeting = (held[held.length - 1]) || dates[0] || null;
   html += '<section class="card" id="meetingReport"></section>';
 
@@ -1364,7 +1599,7 @@ function drawMeetingReport(dates) {
   const el = $('#meetingReport');
   const st = S.stats;
   if (!dates.length || !st.meeting) {
-    el.innerHTML = '<div class="card-head"><h2>Saturday report</h2></div><p class="empty">Nothing recorded yet.</p>';
+    el.innerHTML = '<div class="card-head"><h2>Report</h2></div><p class="empty">Nothing recorded yet.</p>';
     return;
   }
   const d = st.meeting;
@@ -1395,16 +1630,16 @@ function drawMeetingReport(dates) {
   const noShows = members.filter(m => { const r = rec(d, m.id) || {}; return (r.wedStatus === 'coming' || r.wedStatus === 'late') && r.satStatus === 'absent'; });
 
   el.innerHTML =
-    '<div class="card-head"><h2>Saturday report</h2><select class="input" id="mtSel" style="width:auto;margin:0;min-height:38px;padding:6px 10px;font-size:14px">' +
-      dates.map(x => '<option value="' + x + '"' + (x === d ? ' selected' : '') + '>' + esc(fmtMed(x)) + (isCancelled(x) ? ' (no meeting)' : '') + '</option>').join('') + '</select></div>' +
+    '<div class="card-head"><h2>Report</h2><select class="input" id="mtSel" style="width:auto;max-width:60%;margin:0;min-height:38px;padding:6px 10px;font-size:14px">' +
+      dates.map(x => '<option value="' + esc(x) + '"' + (x === d ? ' selected' : '') + '>' + esc(keyLabel(x)) + (isCancelled(x) ? ' (no meeting)' : '') + '</option>').join('') + '</select></div>' +
     '<div class="card-body">' +
       (cancelled ? '<div class="banner bad">' + icon('calendar') + '<span class="grow">No meeting on this date.</span></div>' :
-      '<div class="scroll-x"><table class="ttable"><thead><tr><th>Patrol · reporters</th><th>Wednesday</th><th>Saturday</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' +
+      '<div class="scroll-x"><table class="ttable"><thead><tr><th>Patrol · reporters</th><th>They said</th><th>They came</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' +
       reasonList('Absent', listOf('sat', 'absent'), 'sat') +
       reasonList('Came late', listOf('sat', 'late'), 'sat') +
       reasonList('Said they would come but did not', noShows, 'sat') +
-      reasonList('Said not coming (Wednesday)', listOf('wed', 'out'), 'wed') +
-      reasonList('No reply on Wednesday', listOf('wed', 'noreply'), 'wed')) +
+      reasonList('Said not coming', listOf('wed', 'out'), 'wed') +
+      reasonList('Did not reply', listOf('wed', 'noreply'), 'wed')) +
     '</div>';
   $('#mtSel', el).onchange = (e) => { st.meeting = e.target.value; drawMeetingReport(dates); };
 }
@@ -1413,12 +1648,14 @@ function openMemberHistory(id) {
   const m = S.data.members.find(x => x.id === id);
   if (!m) return;
   const stat = computeStats().byId.get(id);
-  const dates = S.data.attendance.filter(a => a.memberId === id).map(a => a.date).sort().reverse();
+  const when = (k) => (isEventKey(k) ? ((findEvent(k) || {}).date || '0000') : k);
+  const dates = S.data.attendance.filter(a => a.memberId === id).map(a => a.date)
+    .filter(k => !isEventKey(k) || findEvent(k)).sort((a, b) => when(b).localeCompare(when(a)));
   const rows = dates.map(d => {
     const r = rec(d, id) || {};
     const w = r.wedStatus ? statusMeta('wed', r.wedStatus) : null;
     const s = r.satStatus ? statusMeta('sat', r.satStatus) : null;
-    return '<tr><td class="num">' + esc(fmtMed(d)) + (isCancelled(d) ? '<div class="muted small">no meeting</div>' : '') + '</td>' +
+    return '<tr><td class="num">' + esc(keyLabel(d)) + (isCancelled(d) ? '<div class="muted small">no meeting</div>' : '') + '</td>' +
       '<td>' + (w ? '<span class="pill ' + w.tone + '">' + esc(w.label) + '</span>' + (r.wedReason ? '<div class="small muted">' + esc(r.wedReason) + '</div>' : '') : '<span class="muted">–</span>') + '</td>' +
       '<td>' + (s ? '<span class="pill ' + s.tone + '">' + esc(s.label) + '</span>' + (r.satReason ? '<div class="small muted">' + esc(r.satReason) + '</div>' : '') : '<span class="muted">–</span>') + '</td></tr>';
   }).join('');
@@ -1430,7 +1667,7 @@ function openMemberHistory(id) {
       (stat.absStreak ? '<span class="pill ' + (stat.streakAlert ? 'bad glow' : '') + '">' + stat.absStreak + ' missed in a row</span>' : '') +
       '<span class="pill warn">' + plural(stat.late, 'late') + '</span>' +
       (stat.broken ? '<span class="pill bad">Said yes, didn\'t come ×' + stat.broken + '</span>' : '') + '</div>' : '') +
-    '<div class="scroll-x" style="margin-top:14px"><table class="ttable"><thead><tr><th>Date</th><th>Wednesday</th><th>Saturday</th></tr></thead><tbody>' +
+    '<div class="scroll-x" style="margin-top:14px"><table class="ttable"><thead><tr><th>When</th><th>They said</th><th>They came</th></tr></thead><tbody>' +
       (rows || '<tr><td colspan="3" class="muted">Nothing recorded yet.</td></tr>') + '</tbody></table></div>' +
     '<div class="modal-actions"><button class="btn" data-close>Close</button></div>', { wide: true });
 }
@@ -1457,25 +1694,18 @@ function renderAdmin(v) {
   const active = S.data.members.filter(m => m.active);
   const inactive = S.data.members.filter(m => !m.active);
 
+  const evList = S.data.events.map(e =>
+    '<div class="rep"><span class="avatar" style="--pc:var(--accent)">' + icon(e.kind === 'camp' ? 'calendar' : 'plus', 'sm') + '</span><div class="grow"><b>' + esc(e.title) + '</b>' +
+    '<div class="tags"><span class="pill">' + (e.kind === 'camp' ? 'Camp' : 'Special event') + '</span><span class="pill">' + esc(eventDates(e)) + '</span></div></div>' +
+    '<button class="btn sm" data-evedit="' + esc(e.id) + '">Edit</button></div>').join('');
+
   v.innerHTML =
     '<div><h1>Admin</h1><p class="sub">Only the chief sees this page.</p></div>' +
+    (src.syncError ? '<div class="banner bad">' + icon('alert') + '<span class="grow"><b>Cannot read the members file in Drive:</b> ' + esc(src.syncError) + '</span></div>' : '') +
     '<div class="grid-2">' +
-    // members source
-    '<section class="card"><div class="card-head"><h2>Members list</h2><span class="pill accent">' + plural(active.length, 'scout') + '</span></div><div class="card-body">' +
-      (src.url ?
-        '<div class="banner ' + (src.syncError ? 'bad' : 'info') + '" style="margin-bottom:14px">' + icon(src.syncError ? 'alert' : 'check') + '<span class="grow">' +
-          (src.syncError ? '<b>Cannot read the Drive file:</b> ' + esc(src.syncError) :
-            '<b>Connected to ' + esc(src.fileName || 'the Drive file') + ' › ' + esc(src.sheetName) + '</b><br>Changes in Drive appear automatically (checked every 5 min while the app is used). ' +
-            (src.fileUpdated ? 'File last changed ' + esc(ago(src.fileUpdated)) + '.' : '')) +
-          '</span><button class="btn sm" id="srcCheck">' + icon('refresh', 'sm') + 'Check now</button></div>' :
-        '<p class="sub" style="margin:0 0 14px">Paste the link of your members file in Google Drive, then Preview and Import. The app then stays connected to it.</p>') +
-      '<p class="sub" style="margin:0 0 14px">To use another file or tab: change it below, Preview, then Import. Scouts removed from the file keep their history.</p>' +
-      '<label class="field">Google Drive link<input class="input" id="srcUrl" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/…" value="' + esc(src.url) + '"></label>' +
-      '<label class="field">Tab<select class="input" id="srcSheet"><option value="">' + (src.sheetName ? esc(src.sheetName) : 'First visible tab') + '</option></select></label>' +
-      '<div class="row" style="margin-top:14px"><button class="btn" id="srcPreview">Preview</button><button class="btn primary" id="srcImport">Import</button></div>' +
-      '<div id="srcResult"></div>' +
-      (src.lastImport ? '<p class="muted small" style="margin-top:12px">Last import ' + esc(ago(src.lastImport)) + ' by ' + esc(src.lastImportBy) + (src.fileName ? ' · ' + esc(src.fileName) + ' › ' + esc(src.sheetName) : '') + '</p>' : '') +
-    '</div></section>' +
+    // camps & special events
+    '<section class="card"><div class="card-head"><h2>Camps &amp; events</h2><button class="btn sm primary" id="addEv">' + icon('plus', 'sm') + 'New event</button></div>' +
+      '<div class="card-body" style="padding-top:0;padding-bottom:4px">' + (evList || '<p class="empty">No camps or events.</p>') + '</div></section>' +
     // reporters
     '<section class="card"><div class="card-head"><h2>Reporters</h2><button class="btn sm primary" id="addRep">' + icon('plus', 'sm') + 'Add</button></div><div class="card-body" style="padding-top:0;padding-bottom:4px" id="repList"></div></section>' +
     '</div>' +
@@ -1491,6 +1721,7 @@ function renderAdmin(v) {
       '<label class="field">Amber when attendance is under … %<input class="input" type="number" inputmode="numeric" min="1" max="100" name="warnPct" value="' + set.warnPct + '"></label>' +
       '<label class="field">Red when attendance is under … %<input class="input" type="number" inputmode="numeric" min="0" max="100" name="lowPct" value="' + set.lowPct + '"></label>' +
       '<button class="btn primary" type="submit" style="margin-top:16px">Save rules</button></form></div></section>' +
+    '</div>' +
     // scouts list
     '<details class="card"><summary>All scouts <span class="pill">' + active.length + '</span></summary><div class="card-body" style="padding-top:0">' +
       S.data.patrols.map(p => {
@@ -1500,7 +1731,19 @@ function renderAdmin(v) {
       }).join('') +
       (inactive.length ? '<div style="margin-top:16px"><h3>No longer on the list</h3><p class="small muted" style="margin-top:4px">' + inactive.map(m => esc(m.name)).join(', ') + '</p></div>' : '') +
     '</div></details>' +
-    '</div>';
+    // members file (Drive) — set once, kept out of the way
+    '<details class="card"' + (src.url ? '' : ' open') + '><summary>Members file (Google Drive)</summary><div class="card-body" style="padding-top:0">' +
+      (src.url ? '<p class="sub" style="margin:0 0 14px">Connected to <b>' + esc(src.fileName || 'the Drive file') + ' › ' + esc(src.sheetName) + '</b>. ' +
+        'Edits to that file show in the app by themselves within 5 minutes (↻ checks now).' + (src.fileUpdated ? ' File last changed ' + esc(ago(src.fileUpdated)) + '.' : '') + '</p>' :
+        '<p class="sub" style="margin:0 0 14px">Paste the link of your members file in Google Drive, then Preview and Import.</p>') +
+      '<p class="muted small" style="margin:0 0 10px">Only change this to use a different file or tab.</p>' +
+      '<label class="field">Google Drive link<input class="input" id="srcUrl" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/…" value="' + esc(src.url) + '"></label>' +
+      '<label class="field">Tab<select class="input" id="srcSheet"><option value="">' + (src.sheetName ? esc(src.sheetName) : 'First visible tab') + '</option></select></label>' +
+      '<div class="row" style="margin-top:14px"><button class="btn" id="srcPreview">Preview</button><button class="btn primary" id="srcImport">Import</button>' +
+        (src.url ? '<button class="btn" id="srcCheck">' + icon('refresh', 'sm') + 'Check now</button>' : '') + '</div>' +
+      '<div id="srcResult"></div>' +
+      (src.lastImport ? '<p class="muted small" style="margin-top:12px">Last import ' + esc(ago(src.lastImport)) + ' by ' + esc(src.lastImportBy) + '</p>' : '') +
+    '</div></details>';
 
   drawReporters();
   drawLeaders();
@@ -1534,6 +1777,8 @@ function renderAdmin(v) {
   $('#srcSheet').onchange = () => { preview = null; runSync(false); };
   $('#srcUrl').oninput = () => { preview = null; };
   $('#addRep').onclick = () => editReporter(null);
+  $('#addEv').onclick = () => editEvent(null, () => go('admin', true));
+  $$('[data-evedit]', v).forEach(b => { b.onclick = () => editEvent(findEvent(b.dataset.evedit), () => go('admin', true)); });
 
   $('#setForm').onsubmit = async (e) => {
     e.preventDefault();

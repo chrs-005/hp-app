@@ -13,6 +13,8 @@ const DB_SCHEMA = {
   members: ['id', 'name', 'patrol', 'birthYear', 'active', 'order', 'updatedAt', 'leader'],
   reporters: ['id', 'name', 'pinHash', 'role', 'patrols', 'createdAt'],
   meetings: ['date', 'cancelled', 'note', 'updatedAt'],
+  // Camps and special events. Their attendance rows use the event id in place of a date.
+  events: ['id', 'title', 'kind', 'date', 'endDate', 'order', 'createdAt'],
   attendance: ['date', 'memberId', 'wedStatus', 'wedReason', 'wedBy', 'wedAt', 'satStatus', 'satReason', 'satBy', 'satAt'],
 };
 
@@ -72,6 +74,8 @@ const ACTIONS = {
   saveSettings: saveSettings_,
   syncSource: syncSource_,
   createLeaderAccounts: createLeaderAccounts_,
+  saveEvent: saveEvent_,
+  deleteEvent: deleteEvent_,
 };
 
 // ---------------------------------------------------------------- actions
@@ -162,6 +166,7 @@ function state_(p, token) {
     members: members,
     attendance: attendance,
     meetings: readTable_('meetings').map(m => ({ date: m.date, cancelled: m.cancelled === '1', note: m.note })),
+    events: events_(),
     reporters: isAdmin ? readTable_('reporters').map(publicReporter_) : [],
     source: isAdmin ? {
       url: cfg.sourceUrl || '',
@@ -221,10 +226,13 @@ function saveAttendance_(p, token) {
   readTable_('members').forEach(m => { members[m.id] = m; });
   const cancelled = {};
   readTable_('meetings').forEach(m => { if (m.cancelled === '1') cancelled[m.date] = true; });
+  const eventIds = {};
+  events_().forEach(ev => { eventIds[ev.id] = true; });
   const scope = scopeOf_(me);
 
   entries.forEach(e => {
-    if (!isIsoDate_(e.date)) throw new Error('Bad date: ' + e.date);
+    // e.date is a réunion date (YYYY-MM-DD) or a camp / event id.
+    if (!isIsoDate_(e.date) && !eventIds[e.date]) throw new Error('This event does not exist anymore. Refresh the app.');
     const m = members[e.memberId];
     if (!m) throw new Error('Unknown scout. Refresh the app.');
     if (scope && !scope[m.patrol]) throw new Error('You are not in charge of ' + m.name + '.');
@@ -259,6 +267,69 @@ function saveAttendance_(p, token) {
     });
     writeTable_('attendance', rows);
     return { rows: Object.keys(touched).map(k => touched[k]) };
+  });
+}
+
+const DEFAULT_EVENTS = [
+  { id: 'ev_camp-patrouille', title: 'Camp Patrouille' },
+  { id: 'ev_camp-noel', title: 'Camp Noël' },
+  { id: 'ev_camp-paques', title: 'Camp Pâques' },
+  { id: 'ev_camp-ete', title: 'Camp d\'Été' },
+];
+
+/** Camps (created once, editable) and special events, in display order. */
+function events_() {
+  let rows = readTable_('events').map(stripRow_);
+  if (getConfig_().eventsSeeded !== '1') {
+    withLock_(() => {
+      rows = readTable_('events').map(stripRow_);
+      const have = {};
+      rows.forEach(r => { have[r.id] = true; });
+      DEFAULT_EVENTS.forEach((d, i) => {
+        if (!have[d.id]) rows.push({ id: d.id, title: d.title, kind: 'camp', date: '', endDate: '', order: String(i), createdAt: nowIso_() });
+      });
+      writeTable_('events', rows);
+      setConfig_({ eventsSeeded: '1' });
+    });
+  }
+  return rows
+    .map(r => ({ id: r.id, title: r.title, kind: r.kind || 'special', date: r.date, endDate: r.endDate, order: Number(r.order) || 0 }))
+    .sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'camp' ? -1 : 1) ||
+      (a.kind === 'camp' ? a.order - b.order : (a.date || '9999').localeCompare(b.date || '9999') || a.order - b.order));
+}
+
+/** payload: { id?, title, date?, endDate? }. New events are "special" events. */
+function saveEvent_(p, token) {
+  requireAdmin_(token);
+  const title = String(p.title || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  if (!title) throw new Error('Give the event a name.');
+  ['date', 'endDate'].forEach(k => { if (p[k] && !isIsoDate_(p[k])) throw new Error('Bad date.'); });
+  if (p.date && p.endDate && p.endDate < p.date) throw new Error('The end date is before the start date.');
+  return withLock_(() => {
+    const rows = readTable_('events').map(stripRow_);
+    let r = p.id ? rows.find(x => x.id === p.id) : null;
+    if (p.id && !r) throw new Error('Event not found.');
+    if (!r) {
+      r = { id: newId_('ev_'), kind: 'special', order: String(rows.length), createdAt: nowIso_() };
+      rows.push(r);
+    }
+    r.title = title;
+    r.date = p.date || '';
+    r.endDate = p.endDate || '';
+    writeTable_('events', rows);
+    return { events: events_(), id: r.id };
+  });
+}
+
+/** Deletes a camp or event and everything filled for it. */
+function deleteEvent_(p, token) {
+  requireAdmin_(token);
+  return withLock_(() => {
+    const rows = readTable_('events').map(stripRow_);
+    if (!rows.some(r => r.id === p.id)) throw new Error('Event not found.');
+    writeTable_('events', rows.filter(r => r.id !== p.id));
+    writeTable_('attendance', readTable_('attendance').map(stripRow_).filter(a => a.date !== p.id));
+    return { events: events_() };
   });
 }
 
@@ -389,14 +460,17 @@ function applyRoster_(url, fileId, src, roster, byName) {
   moveDatabaseNextTo_(fileId);
 }
 
-/** The first time, put the app's database sheet in the same Drive folder as the members file. */
+/**
+ * Only once, right after the database sheet was created: put it in the same Drive folder
+ * as the members file. Never again, so the chief can move both files wherever he wants.
+ */
 function moveDatabaseNextTo_(fileId) {
   const props = PropertiesService.getScriptProperties();
   if (props.getProperty('DB_AUTO') !== '1') return;
+  props.deleteProperty('DB_AUTO');
   try {
     const parents = DriveApp.getFileById(fileId).getParents();
     if (parents.hasNext()) DriveApp.getFileById(props.getProperty('DB_ID')).moveTo(parents.next());
-    props.deleteProperty('DB_AUTO');
   } catch (err) { /* keep it where it is */ }
 }
 

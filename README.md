@@ -75,6 +75,14 @@ Then sign in with full name + PIN (asked only once).
   **Admin → Members list** → new link / tab → **Preview** → **Import**.
   Scouts removed from the file keep their history. A scout is recognised by his name.
 
+## Tabs
+
+- **Presence** — *Réunions* (Saturdays) or *Camps & events* (Camp Patrouille, Camp Noël, Camp Pâques,
+  Camp d'Été, plus any special event the chief creates). Two moments for each: **They said** (the answer
+  before — by Wednesday for réunions) and **They came** (what really happened).
+- **Overview** — one grid like the Excel register: every scout × every camp, event and réunion.
+- **Stats** and **Admin** — chief only.
+
 ## Rules
 
 - Red glow: missed 2 Saturdays in a row. Percentages are judged from the 5th Saturday: amber under 75 %,

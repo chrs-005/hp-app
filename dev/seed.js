@@ -52,6 +52,17 @@
       status: i % 6 === 0 ? 'out' : i % 7 === 0 ? 'late' : 'coming', reason: i % 6 === 0 ? 'Travelling' : i % 7 === 0 ? 'Music class' : '',
     }));
     call('saveAttendance', { entries: next }, token);
+
+    // Camps: Camp Patrouille happened, Camp Noël answers are coming in.
+    const evs = call('state', {}, token).events;
+    call('saveEvent', { id: evs[0].id, title: evs[0].title, date: '2026-10-02', endDate: '2026-10-04' }, token);
+    call('saveEvent', { id: evs[1].id, title: evs[1].title, date: '2026-12-27', endDate: '2026-12-30' }, token);
+    call('saveAttendance', { entries: members.map((m, i) => ({
+      date: evs[0].id, memberId: m.id, phase: 'sat', status: i % 9 === 4 ? 'absent' : 'present', reason: i % 9 === 4 ? 'Sick' : '',
+    })) }, token);
+    call('saveAttendance', { entries: members.slice(0, 15).map((m, i) => ({
+      date: evs[1].id, memberId: m.id, phase: 'wed', status: i % 5 === 2 ? 'out' : 'coming', reason: i % 5 === 2 ? 'Travelling' : '',
+    })) }, token);
     return { token: token };
   }
 

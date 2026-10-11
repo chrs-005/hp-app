@@ -44,7 +44,8 @@ const st = ok(call('state', {}, token));
 assert.strictEqual(st.me.role, 'admin');
 assert.strictEqual(st.members.filter(m => m.active).length, 50);
 assert.strictEqual(st.members.filter(m => m.leader).length, 11);
-assert.strictEqual(st.attendance.length, 50 * 6 + 20);
+assert.strictEqual(st.attendance.filter(a => /^\d{4}-/.test(a.date)).length, 50 * 6 + 20);
+assert.strictEqual(st.attendance.filter(a => a.date.indexOf('ev_') === 0).length, 50 + 15);
 assert.strictEqual(st.source.sheetName, '2025-2026');
 assert.strictEqual(st.reporters.length, 12);
 const fauconLeads = st.reporters.filter(r => r.patrols.join() === 'Faucon');
@@ -157,6 +158,38 @@ assert.deepStrictEqual(st3.membersSync.added, ['Late Joiner']);
 assert.ok(st3.members.some(m => m.name === 'Late Joiner' && m.active));
 assert.strictEqual(st3.source.lastImportBy, 'Auto-sync');
 assert.strictEqual(c3('state', { sync: true }, setup3.token).membersSync, null);
+
+// The database is moved only once: after the chief moves it, imports leave it alone.
+f3.drive.dbFolder = 'Secretariat/HP App';
+f3.drive.updated = new Date('2026-10-13T09:00:00Z');
+c3('state', { sync: true }, setup3.token);
+assert.strictEqual(f3.drive.dbFolder, 'Secretariat/HP App');
+
+// Camps & special events.
+const evs = st3.events;
+assert.deepStrictEqual(evs.map(e => e.title), ['Camp Patrouille', 'Camp Noël', 'Camp Pâques', 'Camp d\'Été']);
+assert.ok(evs.every(e => e.kind === 'camp'));
+const noel = evs[1].id;
+let evRes = c3('saveEvent', { id: noel, title: 'Camp Noël', date: '2026-12-27', endDate: '2026-12-30' }, setup3.token);
+assert.strictEqual(evRes.events[1].date, '2026-12-27');
+evRes = c3('saveEvent', { title: 'Sortie Jamboree', date: '2026-11-05' }, setup3.token);
+const special = evRes.id;
+assert.deepStrictEqual(evRes.events.map(e => e.kind), ['camp', 'camp', 'camp', 'camp', 'special']);
+assert.match(s3.api({ action: 'saveEvent', payload: { title: 'X', date: '2026-11-05', endDate: '2026-11-01' }, token: setup3.token }).error, /before/);
+const someone = st3.members[0].id;
+c3('saveAttendance', { entries: [
+  { date: noel, memberId: someone, phase: 'wed', status: 'out', reason: 'Travel' },
+  { date: special, memberId: someone, phase: 'sat', status: 'present' },
+] }, setup3.token);
+assert.match(s3.api({ action: 'saveAttendance', payload: { entries: [{ date: 'ev_nope', memberId: someone, phase: 'sat', status: 'present' }] }, token: setup3.token }).error, /does not exist/);
+let st5 = c3('state', {}, setup3.token);
+assert.strictEqual(st5.attendance.filter(a => a.date === noel || a.date === special).length, 2);
+c3('deleteEvent', { id: special }, setup3.token);
+st5 = c3('state', {}, setup3.token);
+assert.strictEqual(st5.events.length, 4);
+assert.strictEqual(st5.attendance.filter(a => a.date === special).length, 0);
+c3('deleteEvent', { id: noel }, setup3.token);
+assert.strictEqual(c3('state', {}, setup3.token).events.length, 3);   // deleted camps do not come back
 
 // Setup with a bad link still creates the chief and reports the problem.
 const f4 = makeFakes({ source: source, standalone: true });
