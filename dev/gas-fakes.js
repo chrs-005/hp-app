@@ -98,6 +98,8 @@
       sourceStore[s.name] = { hidden: s.hidden, rows: s.grid.map(r => r.slice()), colors: (s.colors || []).map(r => r.slice()) };
     });
     const sourceSs = SpreadsheetFake('TMP', sourceStore);
+    // Drive state the tests can change: when the members file was last modified, where the DB went.
+    const drive = { updated: new Date('2026-10-11T16:56:11Z'), dbFolder: null };
 
     function fakeHash(text) {
       // FNV-1a, repeated to 32 bytes. Not cryptographic — local testing only.
@@ -112,8 +114,9 @@
 
     return {
       persist: () => opts.save && opts.save(state),
+      drive: drive,
       SpreadsheetApp: {
-        getActiveSpreadsheet: () => db,
+        getActiveSpreadsheet: () => (opts.standalone ? null : db),
         create: () => db,
         openById: (id) => {
           if (id === 'DB') return db;
@@ -126,6 +129,7 @@
         getScriptProperties: () => ({
           getProperty: (k) => (k in state.props ? state.props[k] : null),
           setProperty: (k, v) => { state.props[k] = String(v); },
+          deleteProperty: (k) => { delete state.props[k]; },
         }),
       },
       CacheService: {
@@ -149,10 +153,14 @@
       },
       DriveApp: {
         getFileById: (id) => {
+          if (id === 'DB') return { moveTo: (folder) => { drive.dbFolder = folder.getName(); } };
           if (id === 'TMP' || /^[\w-]{20,}$/.test(id)) {
+            const folders = [{ getName: () => 'Scouts 2026-2027' }];
             return {
               getMimeType: () => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
               getName: () => source.name,
+              getLastUpdated: () => drive.updated,
+              getParents: () => ({ hasNext: () => folders.length > 0, next: () => folders.shift() }),
               setTrashed: () => {},
             };
           }
@@ -168,7 +176,7 @@
 
   /** Evaluates Code.gs with the fake services in scope and returns its entry points. */
   function loadServer(code, fakes) {
-    const names = Object.keys(fakes).filter(k => k !== 'persist');
+    const names = Object.keys(fakes).filter(k => k !== 'persist' && k !== 'drive');
     const factory = new Function(...names, code + '\n;return { api: api, parseRoster_: parseRoster_ };');
     return factory(...names.map(n => fakes[n]));
   }

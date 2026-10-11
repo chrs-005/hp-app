@@ -84,18 +84,23 @@ function bootstrap_() {
   };
 }
 
-/** First run only: creates the chief (admin) account. */
+/** First run only: creates the chief (admin) account and connects the members file. */
 function setup_(p) {
-  return withLock_(() => {
+  const name = cleanName_(p.name);
+  const pin = cleanPin_(p.pin);
+  const token = withLock_(() => {
     if (readTable_('reporters').length) throw new Error('The app is already set up.');
-    const name = cleanName_(p.name);
-    const pin = cleanPin_(p.pin);
     const id = newId_('r');
     writeTable_('reporters', [{
       id: id, name: name, pinHash: hash_(id + ':' + pin), role: 'admin', patrols: '', createdAt: nowIso_(),
     }]);
-    return { token: makeToken_(id) };
+    return makeToken_(id);
   });
+  let importError = '';
+  if (p.sourceUrl) {
+    try { syncSource_({ url: p.sourceUrl, apply: true }, token); } catch (err) { importError = String(err.message || err); }
+  }
+  return { token: token, importError: importError };
 }
 
 /** payload: { name, pin }. The name is matched ignoring case, accents and extra spaces. */
@@ -127,8 +132,10 @@ function login_(p) {
   return { token: makeToken_(r.id) };
 }
 
+/** payload.sync = true forces a check of the members file in Drive (the ↻ button). */
 function state_(p, token) {
   const me = auth_(token);
+  const membersSync = autoSync_(p.sync === true);
   const cfg = getConfig_();
   const isAdmin = me.role === 'admin';
   const members = readTable_('members').map(m => ({
@@ -162,9 +169,42 @@ function state_(p, token) {
       fileName: cfg.sourceFileName || '',
       lastImport: cfg.lastImport || '',
       lastImportBy: cfg.lastImportBy || '',
+      fileUpdated: cfg.sourceFileUpdated || '',
+      syncError: cfg.syncError || '',
     } : null,
+    membersSync: membersSync,
     serverTime: nowIso_(),
   };
+}
+
+/**
+ * Keeps the members list in sync with the Drive file: if the file was modified since
+ * the last import, it is imported again. Checked at most every 5 minutes (or now when
+ * forced). Returns the changes when an import happened, else null.
+ */
+function autoSync_(force) {
+  const cache = CacheService.getScriptCache();
+  if (!force && cache.get('srcChecked')) return null;
+  cache.put('srcChecked', '1', 300);
+  const cfg = getConfig_();
+  const fileId = fileIdFromUrl_(cfg.sourceUrl || '');
+  if (!fileId) return null;
+  try {
+    const updated = DriveApp.getFileById(fileId).getLastUpdated().toISOString();
+    if (updated === cfg.sourceFileUpdated) {
+      if (cfg.syncError) setConfig_({ syncError: '' });
+      return null;
+    }
+    const src = readSourceWorkbook_(fileId, cfg.sourceSheet || '');
+    const roster = parseRoster_(src.grid, src.colors);
+    if (!roster.members.length) throw new Error('No names found in the tab "' + src.sheetName + '".');
+    const diff = diffRoster_(readTable_('members').map(stripRow_), roster.members);
+    applyRoster_(cfg.sourceUrl, fileId, src, roster, 'Auto-sync');
+    return { added: diff.added, removed: diff.removed, moved: diff.moved, total: diff.total };
+  } catch (err) {
+    setConfig_({ syncError: String((err && err.message) || err) });
+    return null;
+  }
 }
 
 /**
@@ -320,8 +360,15 @@ function syncSource_(p, token) {
   };
   if (!p.apply) return result;
 
+  applyRoster_(url, fileId, src, roster, me.name);
+  result.applied = true;
+  return result;
+}
+
+function applyRoster_(url, fileId, src, roster, byName) {
   withLock_(() => {
     const now = nowIso_();
+    const existing = readTable_('members').map(stripRow_);
     const seen = {};
     const out = roster.members.map((m, i) => {
       seen[m.id] = true;
@@ -334,12 +381,23 @@ function syncSource_(p, token) {
     });
     writeTable_('members', out);
     setConfig_({
-      sourceUrl: url, sourceSheet: src.sheetName, sourceFileName: src.fileName,
-      patrols: JSON.stringify(roster.patrols), lastImport: now, lastImportBy: me.name,
+      sourceUrl: url, sourceSheet: src.sheetName, sourceFileName: src.fileName, sourceFileUpdated: src.updated,
+      patrols: JSON.stringify(roster.patrols), lastImport: now, lastImportBy: byName, syncError: '',
     });
   });
-  result.applied = true;
-  return result;
+  CacheService.getScriptCache().put('srcChecked', '1', 300);
+  moveDatabaseNextTo_(fileId);
+}
+
+/** The first time, put the app's database sheet in the same Drive folder as the members file. */
+function moveDatabaseNextTo_(fileId) {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('DB_AUTO') !== '1') return;
+  try {
+    const parents = DriveApp.getFileById(fileId).getParents();
+    if (parents.hasNext()) DriveApp.getFileById(props.getProperty('DB_ID')).moveTo(parents.next());
+    props.deleteProperty('DB_AUTO');
+  } catch (err) { /* keep it where it is */ }
 }
 
 /**
@@ -414,6 +472,7 @@ function readSourceWorkbook_(fileId, sheetName) {
       sheetName: sheet.getName(),
       grid: range.getDisplayValues(),
       colors: fontColors_(ss, range),
+      updated: file.getLastUpdated().toISOString(),
     };
   } finally {
     if (tempId) DriveApp.getFileById(tempId).setTrashed(true);
@@ -592,7 +651,13 @@ function db_() {
   const props = PropertiesService.getScriptProperties();
   const id = props.getProperty('DB_ID');
   if (id) return SpreadsheetApp.openById(id);
-  const ss = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.create('HP App – Database');
+  // Script attached to a sheet: use it. Standalone script: create the database sheet
+  // (it is moved next to the members file at the first import).
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    ss = SpreadsheetApp.create('HP App – Database (do not edit)');
+    props.setProperty('DB_AUTO', '1');
+  }
   props.setProperty('DB_ID', ss.getId());
   return ss;
 }

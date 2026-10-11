@@ -133,4 +133,35 @@ assert.strictEqual(made.created.length, 11);
 assert.ok(made.created.every(x => /^\d{6}$/.test(x.pin)));
 c2('login', { name: made.created[0].name, pin: made.created[0].pin });
 
+// Standalone script: setup with the members link creates the DB, imports, and moves the DB next to the file.
+const f3 = makeFakes({ source: source, standalone: true });
+const s3 = loadServer(code, f3);
+const c3 = (a, p, t) => ok(s3.api({ action: a, payload: p, token: t }));
+const setup3 = c3('setup', { name: 'Chief', pin: '1234', sourceUrl: SOURCE_URL });
+assert.strictEqual(setup3.importError, '');
+let st3 = c3('state', {}, setup3.token);
+assert.strictEqual(st3.members.filter(m => m.active).length, 50);
+assert.strictEqual(f3.drive.dbFolder, 'Scouts 2026-2027');
+assert.strictEqual(st3.membersSync, null);
+
+// Live sync: the file changes in Drive -> next forced refresh imports it; unchanged -> nothing.
+const src3 = f3.SpreadsheetApp.openById('TMP').getSheetByName('2025-2026');
+src3.getRange(19, 4, 1, 1).setValues([['Late Joiner']]);
+st3 = c3('state', { sync: true }, setup3.token);
+assert.strictEqual(st3.membersSync, null);                       // file date unchanged -> no re-import
+f3.drive.updated = new Date('2026-10-12T09:00:00Z');
+st3 = c3('state', {}, setup3.token);
+assert.strictEqual(st3.membersSync, null);                       // checked < 5 min ago -> skipped
+st3 = c3('state', { sync: true }, setup3.token);                 // ↻ button
+assert.deepStrictEqual(st3.membersSync.added, ['Late Joiner']);
+assert.ok(st3.members.some(m => m.name === 'Late Joiner' && m.active));
+assert.strictEqual(st3.source.lastImportBy, 'Auto-sync');
+assert.strictEqual(c3('state', { sync: true }, setup3.token).membersSync, null);
+
+// Setup with a bad link still creates the chief and reports the problem.
+const f4 = makeFakes({ source: source, standalone: true });
+const s4 = loadServer(code, f4);
+const setup4 = ok(s4.api({ action: 'setup', payload: { name: 'Chief', pin: '1234', sourceUrl: 'nope' } }));
+assert.ok(setup4.token && setup4.importError);
+
 console.log('All server tests passed.');

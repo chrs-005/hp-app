@@ -203,11 +203,11 @@ label.field + label.field { margin-top: 12px; }
 }
 .chip[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
-.banner { display: flex; gap: 10px; align-items: center; padding: 12px 14px; border-radius: 12px; font-size: 14px; font-weight: 500; }
+.banner { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 14px; border-radius: 12px; font-size: 14px; font-weight: 500; }
 .banner.info { background: var(--accent-soft); color: var(--accent-text); }
 .banner.warn { background: var(--warn-soft); color: var(--warn-ink); }
 .banner.bad { background: var(--bad-soft); color: var(--bad-ink); }
-.banner .grow { flex: 1; }
+.banner .grow { flex: 1 1 200px; min-width: 0; }
 
 /* red glow for "missed N in a row" */
 @keyframes glow {
@@ -778,20 +778,34 @@ async function loadState() {
   indexData();
   renderShell();
   go(S.tab);
+  announceMembersSync();
 }
 
+/** quiet = background refresh. The ↻ button (not quiet) also checks the Drive members file now. */
 async function refresh(quiet) {
   if (S.pending.size || S.inflight) { await flush(); }
   try {
-    S.data = await call('state');
+    S.data = await call('state', quiet ? {} : { sync: true });
     S.loadedAt = Date.now();
     indexData();
     go(S.tab, true);
-    if (!quiet) toast('Up to date');
+    if (!announceMembersSync() && !quiet) toast('Up to date');
   } catch (e) {
     if (e.message === 'AUTH') return logout();
     if (!quiet) toast(e.message, 'bad');
   }
+}
+
+/** Tells the user when the members list was just re-imported from Drive. */
+function announceMembersSync() {
+  const s = S.data && S.data.membersSync;
+  if (!s) return false;
+  const parts = [];
+  if (s.added.length) parts.push('+' + s.added.length + ' new');
+  if (s.removed.length) parts.push(s.removed.length + ' removed');
+  if (s.moved.length) parts.push(s.moved.length + ' changed patrol');
+  toast('Members list updated from Drive' + (parts.length ? ': ' + parts.join(', ') : ''));
+  return true;
 }
 
 function logout() {
@@ -842,18 +856,27 @@ function renderSetup() {
     '<label class="field">Your name<input class="input" id="suName" autocomplete="name" required maxlength="60"></label>' +
     '<label class="field">Choose a PIN (4–8 digits)<input class="input" id="suPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" required></label>' +
     '<label class="field">Repeat the PIN<input class="input" id="suPin2" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" required></label>' +
+    '<label class="field">Link of your members file in Google Drive<input class="input" id="suSrc" inputmode="url" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…"></label>' +
+    '<p class="muted small" style="margin-top:6px">The app stays connected to this file: when you change it in Drive, the app updates by itself.</p>' +
     '<button class="btn primary block" type="submit">Create chief account</button><p class="err" id="suErr"></p></form>');
   $('#setupForm').onsubmit = async (e) => {
     e.preventDefault();
     if ($('#suPin').value !== $('#suPin2').value) { $('#suErr').textContent = 'The two PINs are different.'; return; }
+    const btn = $('#setupForm button');
+    btn.disabled = true;
+    btn.textContent = 'Connecting to Drive…';
     try {
-      const res = await call('setup', { name: $('#suName').value, pin: $('#suPin').value });
+      const res = await call('setup', { name: $('#suName').value, pin: $('#suPin').value, sourceUrl: $('#suSrc').value.trim() });
       S.token = res.token;
       store.set('hp.token', res.token);
       S.tab = 'admin';
       await loadState();
+      if (res.importError) toast('Members file: ' + res.importError, 'bad');
+      else if (S.data.members.length) toast(S.data.members.length + ' scouts loaded from Drive');
     } catch (err) {
       $('#suErr').textContent = err.message;
+      btn.disabled = false;
+      btn.textContent = 'Create chief account';
     }
   };
 }
@@ -1439,7 +1462,14 @@ function renderAdmin(v) {
     '<div class="grid-2">' +
     // members source
     '<section class="card"><div class="card-head"><h2>Members list</h2><span class="pill accent">' + plural(active.length, 'scout') + '</span></div><div class="card-body">' +
-      '<p class="sub" style="margin:0 0 14px">The scouts come from your Google Drive spreadsheet. Change the link whenever you want, preview, then import. Scouts removed from the file keep their history but disappear from the lists.</p>' +
+      (src.url ?
+        '<div class="banner ' + (src.syncError ? 'bad' : 'info') + '" style="margin-bottom:14px">' + icon(src.syncError ? 'alert' : 'check') + '<span class="grow">' +
+          (src.syncError ? '<b>Cannot read the Drive file:</b> ' + esc(src.syncError) :
+            '<b>Connected to ' + esc(src.fileName || 'the Drive file') + ' › ' + esc(src.sheetName) + '</b><br>Changes in Drive appear automatically (checked every 5 min while the app is used). ' +
+            (src.fileUpdated ? 'File last changed ' + esc(ago(src.fileUpdated)) + '.' : '')) +
+          '</span><button class="btn sm" id="srcCheck">' + icon('refresh', 'sm') + 'Check now</button></div>' :
+        '<p class="sub" style="margin:0 0 14px">Paste the link of your members file in Google Drive, then Preview and Import. The app then stays connected to it.</p>') +
+      '<p class="sub" style="margin:0 0 14px">To use another file or tab: change it below, Preview, then Import. Scouts removed from the file keep their history.</p>' +
       '<label class="field">Google Drive link<input class="input" id="srcUrl" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/…" value="' + esc(src.url) + '"></label>' +
       '<label class="field">Tab<select class="input" id="srcSheet"><option value="">' + (src.sheetName ? esc(src.sheetName) : 'First visible tab') + '</option></select></label>' +
       '<div class="row" style="margin-top:14px"><button class="btn" id="srcPreview">Preview</button><button class="btn primary" id="srcImport">Import</button></div>' +
@@ -1496,6 +1526,7 @@ function renderAdmin(v) {
     }
   };
   $('#srcPreview').onclick = () => runSync(false);
+  if ($('#srcCheck')) $('#srcCheck').onclick = () => refresh();
   $('#srcImport').onclick = async () => {
     if (!preview && !await confirmBox('Import now?', 'The scouts list will be replaced by the one in the file. History is kept.', 'Import')) return;
     runSync(true);

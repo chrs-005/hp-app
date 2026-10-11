@@ -21,10 +21,12 @@ No scout data is stored in this repository. Everything lives in the chief's Goog
 
 ## 1. Server (Google Apps Script), one time
 
-Use the Google account that owns the members file in Drive.
+Use the Google account that owns the members file in Drive. You don't create any sheet: the app
+reads your members file, and creates its own small sheet **"HP App – Database (do not edit)"** for the
+answers (an .xlsx can't be written to). It moves that sheet into the same Drive folder as your members file.
 
-1. Open <https://sheets.new>. Name the new sheet **HP App – Database** (all attendance is saved here).
-2. **Extensions → Apps Script**.
+1. Open <https://script.google.com/create> (a new Apps Script project opens).
+2. Rename it **HP App** (click "Untitled project" at the top).
 3. ⚙️ **Project Settings** → tick **Show "appsscript.json" manifest file in editor**.
 4. Back in the editor (`< >`):
    - `appsscript.json` → replace everything with [apps-script/appsscript.json](apps-script/appsscript.json)
@@ -47,8 +49,10 @@ GitHub Pages updates within a minute.
 
 ## 3. First use (chief)
 
-1. Open the app link, create the **chief account** (name + PIN).
-2. **Admin → Members list**: paste the Google Drive link of the members file → **Preview** → **Import**.
+1. Open the app link, create the **chief account** (name + PIN + link of the members file in Drive).
+   The scouts load right away.
+2. The app stays connected to that file: when you edit it in Drive, the change shows in the app
+   within 5 minutes (or tap ↻ to check now). Admin shows the connection status.
 3. **Admin → Patrol leaders → Create accounts with PINs**. Leaders are the names written in
    **green or red** in the members file; each gets a 6-digit PIN for his own patrol. Press **Send**
    next to each one (WhatsApp, SMS…) — PINs are shown only once.
@@ -67,7 +71,8 @@ Then sign in with full name + PIN (asked only once).
 - One row with the patrol names side by side, the names under each patrol, birth years in a column
   on the left, a "Total" row at the end.
 - **Green or red name = patrol leader** (gets an account, reports for that patrol).
-- After changing the file in Drive: **Admin → Preview → Import** (the link is remembered).
+- Edit the same file in Drive and the app follows automatically. To switch to another file or tab:
+  **Admin → Members list** → new link / tab → **Preview** → **Import**.
   Scouts removed from the file keep their history. A scout is recognised by his name.
 
 ## Rules
@@ -86,7 +91,7 @@ Then sign in with full name + PIN (asked only once).
 ## Forgot a PIN
 
 - Leader: chief → **Admin → Reporters → Edit** → new PIN.
-- Chief: in the **HP App – Database** sheet, tab `reporters`, type `plain:1234` in your `pinHash` cell,
+- Chief: in the **HP App – Database (do not edit)** sheet, tab `reporters`, type `plain:1234` in your `pinHash` cell,
   sign in with 1234 (it is re-encrypted automatically), then change it.
 
 ## Testing on a computer
