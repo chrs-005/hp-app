@@ -1,0 +1,10 @@
+# Never publish real members data
+*.xlsx
+*.csv
+real-source*.js
+dev/*.local.js
+
+.claude/
+node_modules/
+.DS_Store
+Thumbs.db
