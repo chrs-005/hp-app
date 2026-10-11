@@ -488,11 +488,15 @@ const fmtLong = (s) => fmtDate(s, { weekday: 'long', day: 'numeric', month: 'lon
 const fmtShort = (s) => fmtDate(s, { day: 'numeric', month: 'short' });
 const fmtMed = (s) => fmtDate(s, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 function nearestSaturday(s) { const d = parseIso(s); return addDays(s, (6 - d.getDay() + 7) % 7); }
+/**
+ * What Presence opens on: Saturday -> today (They came); Sunday & Monday -> the Saturday just
+ * passed (They came); Tuesday to Friday -> the coming Saturday (They said).
+ */
 function defaultMeeting() {
   const t = todayIso();
   const day = parseIso(t).getDay();
   if (day === 6) return { date: t, phase: 'sat' };
-  if (day === 0) return { date: addDays(t, -1), phase: 'sat' };   // Sunday: finish yesterday's report
+  if (day === 0 || day === 1) return { date: addDays(t, -day - 1), phase: 'sat' };
   return { date: nearestSaturday(t), phase: 'wed' };
 }
 function relLabel(s) {
@@ -572,7 +576,7 @@ const S = {
   token: store.get('hp.token'),
   boot: null,
   data: null,
-  tab: store.get('hp.tab') || 'home',
+  tab: new URLSearchParams(location.search).get('tab') || store.get('hp.tab') || 'home',   // ?tab=presence from a notification
   presence: { date: null, phase: null, patrol: 'all' },
   stats: { patrol: 'all', sort: 'pct', meeting: null },
   pending: new Map(),
@@ -832,7 +836,90 @@ function announceMembersSync() {
   return true;
 }
 
-function logout() {
+// =================================================================== reminders (push notifications)
+const pushSupported = () => !!(window.HP_PWA && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && S.boot && S.boot.vapidKey);
+const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function b64ToBytes(b64url) {
+  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64url.length + 3) % 4);
+  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+async function currentPushSub() {
+  if (!pushSupported()) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+
+/** Home card: turn reminders on / off on this phone. */
+async function drawReminders() {
+  const el = $('#remCard');
+  if (!el) return;
+  const head = '<div class="card-head"><h2>Reminders</h2></div><div class="card-body">';
+  const when = 'Wednesday and Saturday at 5 pm, plus Thursday and Sunday if your scouts are still not filled.';
+  let html = '';
+  if (!pushSupported()) {
+    if (isIos() && !isStandalone() && window.HP_PWA) {
+      html = head + '<p class="sub" style="margin:0">To get reminders on iPhone: tap Share ⬆️ → <b>Add to Home Screen</b>, then open the app from its icon.</p></div>';
+    }
+  } else if (Notification.permission === 'denied') {
+    html = head + '<p class="sub" style="margin:0">Notifications are blocked for this app. Allow them in your phone settings to get reminders.</p></div>';
+  } else {
+    let sub = null;
+    try { sub = await currentPushSub(); } catch (e) { sub = null; }
+    if (sub && Notification.permission === 'granted') {
+      call('savePush', sub.toJSON()).catch(() => {});   // keep it linked to whoever is signed in
+      html = head + '<p class="sub" style="margin:0 0 12px">' + icon('check', 'sm') + ' On for this phone: ' + when + '</p>' +
+        '<button class="btn sm" id="remOff">Turn off</button></div>';
+    } else {
+      html = head + '<p class="sub" style="margin:0 0 12px">Get a notification ' + when + '</p>' +
+        '<button class="btn primary" id="remOn">' + icon('clock', 'sm') + 'Turn on reminders</button></div>';
+    }
+  }
+  if (!document.body.contains(el)) return;
+  el.innerHTML = html;
+  el.classList.toggle('hidden', !html);
+  if ($('#remOn', el)) $('#remOn', el).onclick = enableReminders;
+  if ($('#remOff', el)) $('#remOff', el).onclick = disableReminders;
+}
+
+async function enableReminders() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { drawReminders(); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) ||
+      await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(S.boot.vapidKey) });
+    await call('savePush', sub.toJSON());
+    toast('Reminders are on');
+  } catch (e) {
+    toast('Could not turn on reminders: ' + e.message, 'bad');
+  }
+  drawReminders();
+}
+
+async function disableReminders() {
+  try {
+    const sub = await currentPushSub();
+    if (sub) {
+      await call('removePush', { endpoint: sub.endpoint }).catch(() => {});
+      await sub.unsubscribe();
+    }
+    toast('Reminders are off');
+  } catch (e) { toast(e.message, 'bad'); }
+  drawReminders();
+}
+
+async function logout() {
+  // This phone stops getting the reminders of the person who signs out.
+  try {
+    const sub = await currentPushSub();
+    if (sub) {
+      await call('removePush', { endpoint: sub.endpoint }).catch(() => {});
+      await sub.unsubscribe();
+    }
+  } catch (e) { /* not supported here */ }
   S.token = null;
   S.data = null;
   store.set('hp.token', null);
@@ -934,7 +1021,7 @@ function renderSetup() {
 const TABS = [
   { id: 'home', label: 'Home', icon: 'home', render: renderHome },
   { id: 'presence', label: 'Presence', icon: 'presence', render: renderPresence },
-  { id: 'overview', label: 'Overview', icon: 'grid', render: renderOverview },
+  { id: 'overview', label: 'Overview', icon: 'grid', render: renderOverview, admin: true },
   { id: 'stats', label: 'Stats', icon: 'stats', render: renderStats, admin: true },
   { id: 'admin', label: 'Admin', icon: 'admin', render: renderAdmin, admin: true },
 ];
@@ -954,14 +1041,14 @@ function renderShell() {
       '<div class="main">' +
         '<header class="topbar"><div class="brand-mini" aria-hidden="true">⚜</div><h1 id="tbTitle"></h1>' +
           '<span id="saveState" class="save-state" aria-live="polite"></span>' +
-          '<button class="icon-btn" data-act="refresh" aria-label="Refresh">' + icon('refresh') + '</button></header>' +
+          (isAdmin() ? '<button class="icon-btn" data-act="refresh" aria-label="Refresh">' + icon('refresh') + '</button>' : '') + '</header>' +
         '<main class="view" id="view"></main>' +
       '</div>' +
       '<nav class="tabbar">' + nav + '</nav>' +
     '</div>';
   $$('[data-tab]').forEach(b => { b.onclick = () => go(b.dataset.tab); });
   $$('[data-act="logout"]').forEach(b => { b.onclick = logout; });
-  $('[data-act="refresh"]').onclick = () => refresh();
+  if ($('[data-act="refresh"]')) $('[data-act="refresh"]').onclick = () => refresh();
 }
 
 function go(tabId, keepScroll) {
@@ -1021,6 +1108,7 @@ function renderHome(v) {
       (alerts.length > 6 && isAdmin() ? '<button class="btn block" style="margin-top:12px" data-tab-go="stats">See all ' + alerts.length + '</button>' : '')
       : '<p class="muted">Nobody missed ' + S.data.settings.streakAlert + ' Saturdays in a row' + (stats.tracking ? ' or has low attendance.' : '. Percentages start after ' + S.data.settings.minMeetings + ' meetings (' + stats.held.length + ' so far).') + '</p>') +
     '</div></section>';
+  html += '<section class="card hidden" id="remCard"></section>';
   html += '</div>';
 
   html += '<div class="row" style="justify-content:space-between"><span class="muted small">Signed in as ' + esc(me.name) + '</span><span class="row"><button class="btn sm" data-act="pin">Change my PIN</button><button class="btn sm" data-act="logout2">' + icon('logout', 'sm') + 'Sign out</button></span></div>';
@@ -1030,6 +1118,7 @@ function renderHome(v) {
     b.onclick = () => {
       const parts = b.dataset.go.split('|');
       S.presence.mode = 'reunion';
+      S.presence.day = todayIso();
       S.presence.date = parts[0];
       S.presence.phase = parts[1];
       go('presence');
@@ -1039,6 +1128,7 @@ function renderHome(v) {
   $$('[data-member]', v).forEach(b => { b.onclick = () => openMemberHistory(b.dataset.member); });
   $('[data-act="logout2"]', v).onclick = logout;
   $('[data-act="pin"]', v).onclick = openChangePin;
+  drawReminders();
 }
 
 function attItem(r) {
@@ -1081,8 +1171,8 @@ function defaultEventPhase(ev) {
 
 function renderPresence(v) {
   const P = S.presence;
-  if (!P.mode) P.mode = 'reunion';
-  if (!P.date) Object.assign(P, defaultMeeting());
+  // A new day (app left open on the phone): jump back to the default Saturday for today.
+  if (!P.date || P.day !== todayIso()) Object.assign(P, defaultMeeting(), { mode: 'reunion', day: todayIso() });
   if (P.mode === 'event' && !findEvent(P.eventId)) {
     const evs = S.data.events;
     const next = evs.filter(e => e.date && (e.endDate || e.date) >= todayIso()).sort((a, b) => a.date.localeCompare(b.date))[0];
@@ -1739,7 +1829,12 @@ function renderAdmin(v) {
       '<label class="field">Start tracking percentages after … Saturdays<input class="input" type="number" inputmode="numeric" min="1" max="52" name="minMeetings" value="' + set.minMeetings + '"></label>' +
       '<label class="field">Amber when attendance is under … %<input class="input" type="number" inputmode="numeric" min="1" max="100" name="warnPct" value="' + set.warnPct + '"></label>' +
       '<label class="field">Red when attendance is under … %<input class="input" type="number" inputmode="numeric" min="0" max="100" name="lowPct" value="' + set.lowPct + '"></label>' +
-      '<button class="btn primary" type="submit" style="margin-top:16px">Save rules</button></form></div></section>' +
+      '<button class="btn primary" type="submit" style="margin-top:16px">Save rules</button></form>' +
+      '<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--hair)"><h3>Reminders</h3>' +
+        '<p class="sub">' + (S.data.reminders === true ? icon('check', 'sm') + ' On: Wednesday and Saturday at 5 pm to leaders who still have scouts to fill, again Thursday and Sunday if not done.'
+          : 'Off. To switch them on, open the script in Apps Script, choose <b>setupReminders</b> next to ▷ Run, and click Run once.') + '</p>' +
+        '<button class="btn sm" id="testPush" style="margin-top:10px">Send me a test notification</button></div>' +
+      '</div></section>' +
     '</div>' +
     // scouts list
     '<details class="card"><summary>All scouts <span class="pill">' + active.length + '</span></summary><div class="card-body" style="padding-top:0">' +
@@ -1797,6 +1892,12 @@ function renderAdmin(v) {
   $('#srcUrl').oninput = () => { preview = null; };
   $('#addRep').onclick = () => editReporter(null);
   $('#addEv').onclick = () => editEvent(null, () => go('admin', true));
+  $('#testPush').onclick = async () => {
+    try {
+      const res = await call('testPush', {});
+      toast(res.sent ? 'Sent – it should arrive in a few seconds' : 'Could not reach this phone. Turn reminders off and on again on Home.', res.sent ? '' : 'bad');
+    } catch (e) { toast(e.message, 'bad'); }
+  };
   $$('[data-evedit]', v).forEach(b => { b.onclick = () => editEvent(findEvent(b.dataset.evedit), () => go('admin', true)); });
 
   $('#setForm').onsubmit = async (e) => {

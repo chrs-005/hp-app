@@ -100,6 +100,11 @@
     const sourceSs = SpreadsheetFake('TMP', sourceStore);
     // Drive state the tests can change: when the members file was last modified, where the DB went.
     const drive = { updated: new Date('2026-10-11T16:56:11Z'), dbFolder: null };
+    // Push requests sent by the script, and its time triggers (tests read these).
+    const net = { requests: [], respond: () => 201, triggers: [], now: null };
+    const nodeCrypto = opts.realCrypto ? require('crypto') : null;
+    const signed = (buf) => Array.from(buf, b => (b > 127 ? b - 256 : b));
+    const toBuf = (x) => (typeof x === 'string' ? Buffer.from(x, 'utf8') : Buffer.from(x.map(b => b & 255)));
 
     function fakeHash(text) {
       // FNV-1a, repeated to 32 bytes. Not cryptographic — local testing only.
@@ -115,6 +120,7 @@
     return {
       persist: () => opts.save && opts.save(state),
       drive: drive,
+      net: net,
       SpreadsheetApp: {
         getActiveSpreadsheet: () => (opts.standalone ? null : db),
         create: () => db,
@@ -142,9 +148,19 @@
       LockService: { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) },
       Utilities: {
         DigestAlgorithm: { SHA_256: 'SHA_256' },
-        computeDigest: (alg, text) => fakeHash(text),
-        computeHmacSha256Signature: (text, key) => fakeHash(key + '#' + text),
-        base64EncodeWebSafe: (bytes) => bytes.map(b => (b & 255).toString(16).padStart(2, '0')).join(''),
+        Charset: { UTF_8: 'UTF_8' },
+        computeDigest: (alg, text) => (nodeCrypto ? signed(nodeCrypto.createHash('sha256').update(toBuf(text)).digest()) : fakeHash(String(text))),
+        computeHmacSha256Signature: (value, key) => (nodeCrypto
+          ? signed(nodeCrypto.createHmac('sha256', toBuf(key)).update(toBuf(value)).digest())
+          : fakeHash(String(key) + '#' + String(value))),
+        base64EncodeWebSafe: (bytes) => (nodeCrypto
+          ? Buffer.from(bytes.map(b => b & 255)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_')
+          : bytes.map(b => (b & 255).toString(16).padStart(2, '0')).join('')),
+        newBlob: (text) => ({ getBytes: () => signed(new TextEncoder().encode(String(text))) }),
+        formatDate: (date) => {
+          const d = net.now || date;
+          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        },
         getUuid: () => {
           uuidCounter++;
           const rnd = Math.random().toString(16).slice(2) + Date.now().toString(16) + uuidCounter.toString(16);
@@ -168,6 +184,32 @@
         },
       },
       Drive: { Files: { copy: () => ({ id: 'TMP' }) } },
+      Session: { getScriptTimeZone: () => 'Asia/Beirut' },
+      Logger: { log: () => {} },
+      UrlFetchApp: {
+        fetch: (url, params) => {
+          net.requests.push({ url: url, params: params });
+          const code = net.respond(url);
+          return { getResponseCode: () => code };
+        },
+      },
+      ScriptApp: {
+        WeekDay: { WEDNESDAY: 'WEDNESDAY', THURSDAY: 'THURSDAY', SATURDAY: 'SATURDAY', SUNDAY: 'SUNDAY' },
+        getProjectTriggers: () => net.triggers.map(t => ({ getHandlerFunction: () => t.fn, _t: t })),
+        deleteTrigger: (t) => { net.triggers.splice(net.triggers.indexOf(t._t), 1); },
+        newTrigger: (fn) => {
+          const t = { fn: fn };
+          const b = {
+            timeBased: () => b,
+            onWeekDay: (d) => { t.day = d; return b; },
+            atHour: (h) => { t.hour = h; return b; },
+            nearMinute: (m) => { t.minute = m; return b; },
+            everyWeeks: () => b,
+            create: () => { net.triggers.push(t); return t; },
+          };
+          return b;
+        },
+      },
       MimeType: { GOOGLE_SHEETS: 'application/vnd.google-apps.spreadsheet' },
       HtmlService: {},
       ContentService: {},
@@ -176,8 +218,9 @@
 
   /** Evaluates Code.gs with the fake services in scope and returns its entry points. */
   function loadServer(code, fakes) {
-    const names = Object.keys(fakes).filter(k => k !== 'persist' && k !== 'drive');
-    const factory = new Function(...names, code + '\n;return { api: api, parseRoster_: parseRoster_ };');
+    const names = Object.keys(fakes).filter(k => k !== 'persist' && k !== 'drive' && k !== 'net');
+    const exported = ['api', 'parseRoster_', 'setupReminders', 'notifyWednesday', 'notifyThursday', 'notifySaturday', 'notifySunday', 'vapidJwt_'];
+    const factory = new Function(...names, code + '\n;return {' + exported.map(n => n + ': ' + n).join(', ') + '};');
     return factory(...names.map(n => fakes[n]));
   }
 

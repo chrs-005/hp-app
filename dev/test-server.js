@@ -205,6 +205,88 @@ c3('changePin', { pin: '0000', newPin: '1111' }, two.token);
 c3('login', { name: 'Chief Two', pin: '1111' });
 assert.strictEqual(s3.api({ action: 'login', payload: { name: 'Chief Two', pin: '0000' } }).ok, false);
 
+// ---- Reminders (push). Real crypto: the VAPID signature must verify with Node's ECDSA.
+const crypto = require('crypto');
+const f6 = makeFakes({ source: source, realCrypto: true });
+const s6 = loadServer(code, f6);
+const c6 = (a, p, t) => ok(s6.api({ action: a, payload: p, token: t }));
+const t6 = c6('setup', { name: 'Chief', pin: '1234', sourceUrl: SOURCE_URL }).token;
+const vapidKey = c6('bootstrap', {}).vapidKey;
+assert.match(vapidKey, /^[A-Za-z0-9_-]{87}$/);                         // 65-byte uncompressed P-256 key
+assert.strictEqual(c6('bootstrap', {}).vapidKey, vapidKey);             // stable
+const raw = Buffer.from(vapidKey.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+const pubKey = crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: raw.subarray(1, 33).toString('base64url'), y: raw.subarray(33).toString('base64url') }, format: 'jwk' });
+for (let i = 0; i < 5; i++) {
+  const jwt = s6.vapidJwt_('https://fcm.googleapis.com');
+  const [h, pl, sig] = jwt.split('.');
+  assert.deepStrictEqual(JSON.parse(Buffer.from(h, 'base64url')), { typ: 'JWT', alg: 'ES256' });
+  assert.strictEqual(JSON.parse(Buffer.from(pl, 'base64url')).aud, 'https://fcm.googleapis.com');
+  assert.ok(crypto.verify('sha256', Buffer.from(h + '.' + pl), { key: pubKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig, 'base64url')), 'VAPID signature must verify');
+}
+
+// Leaders subscribe; triggers; who gets notified.
+const st6 = c6('state', {}, t6);
+assert.strictEqual(st6.reminders, false);
+s6.setupReminders();
+assert.deepStrictEqual(f6.net.triggers.map(t => t.fn + '@' + t.day + ' ' + t.hour), ['notifyWednesday@WEDNESDAY 17', 'notifyThursday@THURSDAY 17', 'notifySaturday@SATURDAY 17', 'notifySunday@SUNDAY 17']);
+s6.setupReminders();
+assert.strictEqual(f6.net.triggers.length, 4);                           // running it twice does not duplicate
+assert.strictEqual(c6('state', {}, t6).reminders, true);
+const made6 = c6('createLeaderAccounts', {}, t6).created;
+const panda6 = made6.filter(x => x.patrol === 'Panda');
+const bison6 = made6.find(x => x.patrol === 'Bison');
+const tokOf = (x) => c6('login', { name: x.name, pin: x.pin }).token;
+c6('savePush', { endpoint: 'https://fcm.googleapis.com/fcm/send/panda-1' }, tokOf(panda6[0]));
+c6('savePush', { endpoint: 'https://web.push.apple.com/panda-2' }, tokOf(panda6[1]));
+c6('savePush', { endpoint: 'https://updates.push.services.mozilla.com/bison' }, tokOf(bison6));
+assert.match(s6.api({ action: 'savePush', payload: { endpoint: 'http://evil' }, token: t6 }).error, /Bad subscription/);
+assert.match(s6.api({ action: 'testPush', payload: {}, token: t6 }).error, /Turn on reminders/);
+
+// Wednesday 14 Oct 2026, nothing filled for Saturday 17 -> all three phones.
+f6.net.now = new Date(2026, 9, 14, 17, 0);
+s6.notifyWednesday();
+assert.strictEqual(f6.net.requests.length, 3);
+const req = f6.net.requests[0];
+assert.strictEqual(req.params.method, 'post');
+assert.strictEqual(req.params.payload, '');
+assert.match(req.params.headers.Authorization, /^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]{87}$/);
+assert.strictEqual(req.params.headers.TTL, '86400');
+assert.ok(f6.net.requests.some(r => JSON.parse(Buffer.from(r.params.headers.Authorization.split('.')[1], 'base64url')).aud === 'https://web.push.apple.com'));
+
+// Thursday: Panda filled everything -> only Bison's phone gets the reminder.
+const st6b = c6('state', {}, t6);
+c6('saveAttendance', { entries: st6b.members.filter(m => m.patrol === 'Panda').map(m => ({ date: '2026-10-17', memberId: m.id, phase: 'wed', status: 'coming' })) }, t6);
+f6.net.requests = [];
+f6.net.now = new Date(2026, 9, 15, 17, 0);
+s6.notifyThursday();
+assert.deepStrictEqual(f6.net.requests.map(r => r.url), ['https://updates.push.services.mozilla.com/bison']);
+
+// Saturday: "They came" is a different question -> everyone again. A dead phone (410) is forgotten.
+f6.net.requests = [];
+f6.net.respond = (url) => (url.indexOf('apple') >= 0 ? 410 : 201);
+f6.net.now = new Date(2026, 9, 17, 17, 0);
+s6.notifySaturday();
+assert.strictEqual(f6.net.requests.length, 3);
+f6.net.requests = [];
+f6.net.now = new Date(2026, 9, 18, 17, 0);
+s6.notifySunday();                                                       // still about Saturday 17
+assert.strictEqual(f6.net.requests.length, 2);
+assert.ok(!f6.net.requests.some(r => r.url.indexOf('apple') >= 0));
+
+// No meeting that Saturday -> no notifications.
+c6('setMeeting', { date: '2026-10-24', cancelled: true }, t6);
+f6.net.requests = [];
+f6.net.now = new Date(2026, 9, 21, 17, 0);
+s6.notifyWednesday();
+assert.strictEqual(f6.net.requests.length, 0);
+
+// Test button and turning reminders off.
+f6.net.respond = () => 201;
+const bisonTok = tokOf(bison6);
+assert.strictEqual(c6('testPush', {}, bisonTok).sent, 1);
+c6('removePush', { endpoint: 'https://updates.push.services.mozilla.com/bison' }, bisonTok);
+assert.match(s6.api({ action: 'testPush', payload: {}, token: bisonTok }).error, /Turn on reminders/);
+
 // Setup with a bad link still creates the chief and reports the problem.
 const f4 = makeFakes({ source: source, standalone: true });
 const s4 = loadServer(code, f4);

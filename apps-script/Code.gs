@@ -15,6 +15,8 @@ const DB_SCHEMA = {
   meetings: ['date', 'cancelled', 'note', 'updatedAt'],
   // Camps and special events. Their attendance rows use the event id in place of a date.
   events: ['id', 'title', 'kind', 'date', 'endDate', 'order', 'createdAt'],
+  // Phones that turned on reminders (web push subscriptions).
+  push: ['endpoint', 'reporterId', 'createdAt', 'lastSent', 'lastStatus'],
   attendance: ['date', 'memberId', 'wedStatus', 'wedReason', 'wedBy', 'wedAt', 'satStatus', 'satReason', 'satBy', 'satAt'],
 };
 
@@ -77,6 +79,9 @@ const ACTIONS = {
   saveEvent: saveEvent_,
   deleteEvent: deleteEvent_,
   changePin: changePin_,
+  savePush: savePush_,
+  removePush: removePush_,
+  testPush: testPush_,
 };
 
 // ---------------------------------------------------------------- actions
@@ -86,6 +91,7 @@ function bootstrap_() {
   return {
     needsSetup: readTable_('reporters').length === 0,
     teamName: settings_(getConfig_()).teamName,
+    vapidKey: vapidPublicKey_(),
   };
 }
 
@@ -179,6 +185,7 @@ function state_(p, token) {
       syncError: cfg.syncError || '',
     } : null,
     membersSync: membersSync,
+    reminders: isAdmin ? remindersOn_() : null,
     serverTime: nowIso_(),
   };
 }
@@ -651,6 +658,236 @@ function diffRoster_(existing, incoming) {
     leaders: incoming.filter(m => m.leader).map(m => ({ name: m.name, patrol: m.patrol, leader: m.leader })),
     total: incoming.length,
   };
+}
+
+// ---------------------------------------------------------------- reminders (push notifications)
+//
+// Wednesday 5 pm: "who is coming Saturday?"   Thursday 5 pm: reminder if not filled.
+// Saturday 5 pm:  "who came today?"           Sunday 5 pm:   reminder if not filled.
+// Each phone gets a notification only if its leader still has scouts not filled.
+// Run setupReminders() once from the Apps Script editor to switch this on.
+
+function setupReminders() {
+  const handlers = { notifyWednesday: 'WEDNESDAY', notifyThursday: 'THURSDAY', notifySaturday: 'SATURDAY', notifySunday: 'SUNDAY' };
+  ScriptApp.getProjectTriggers().forEach(t => { if (handlers[t.getHandlerFunction()]) ScriptApp.deleteTrigger(t); });
+  Object.keys(handlers).forEach(fn => {
+    ScriptApp.newTrigger(fn).timeBased().onWeekDay(ScriptApp.WeekDay[handlers[fn]]).atHour(17).nearMinute(0).everyWeeks(1).create();
+  });
+  vapidPublicKey_();
+  Logger.log('Reminders are on: Wednesday, Thursday, Saturday and Sunday around 5 pm (' + Session.getScriptTimeZone() + ').');
+}
+
+function notifyWednesday() { sendReminders_('wed', 3); }
+function notifyThursday() { sendReminders_('wed', 2); }
+function notifySaturday() { sendReminders_('sat', 0); }
+function notifySunday() { sendReminders_('sat', -1); }
+
+function remindersOn_() {
+  try {
+    return ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'notifyWednesday');
+  } catch (err) {
+    return null;
+  }
+}
+
+/** Sends to every phone whose leader has scouts without an answer for that Saturday. */
+function sendReminders_(phase, daysFromToday) {
+  const tz = Session.getScriptTimeZone();
+  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const date = addDaysIso_(today, daysFromToday);
+  if (readTable_('meetings').some(m => m.date === date && m.cancelled === '1')) return { date: date, sent: 0 };
+
+  const filled = {};
+  readTable_('attendance').forEach(a => { if (a.date === date && a[phase + 'Status']) filled[a.memberId] = true; });
+  const members = readTable_('members').filter(m => m.active !== '0');
+  const waiting = {};
+  readTable_('reporters').forEach(r => {
+    const scope = scopeOf_(publicReporter_(r));
+    waiting[r.id] = members.some(m => (!scope || scope[m.patrol]) && !filled[m.id]);
+  });
+  const subs = readTable_('push').filter(s => waiting[s.reporterId]);
+  return { date: date, sent: pushToAll_(subs) };
+}
+
+function savePush_(p, token) {
+  const me = auth_(token);
+  const endpoint = String(p.endpoint || '');
+  if (!/^https:\/\//.test(endpoint) || endpoint.length > 1000) throw new Error('Bad subscription.');
+  return withLock_(() => {
+    const rows = readTable_('push').map(stripRow_).filter(r => r.endpoint !== endpoint);
+    rows.push({ endpoint: endpoint, reporterId: me.id, createdAt: nowIso_(), lastSent: '', lastStatus: '' });
+    writeTable_('push', rows);
+    return { ok: true };
+  });
+}
+
+function removePush_(p, token) {
+  auth_(token);
+  return withLock_(() => {
+    writeTable_('push', readTable_('push').map(stripRow_).filter(r => r.endpoint !== p.endpoint));
+    return { ok: true };
+  });
+}
+
+/** Sends a notification right now to the phones of whoever asks. */
+function testPush_(p, token) {
+  const me = auth_(token);
+  const subs = readTable_('push').filter(s => s.reporterId === me.id);
+  if (!subs.length) throw new Error('Turn on reminders on this phone first (Home tab).');
+  return { sent: pushToAll_(subs) };
+}
+
+/** Empty push messages (the app writes the text itself); dead subscriptions are removed. */
+function pushToAll_(subs) {
+  if (!subs.length) return 0;
+  const jwts = {};
+  const results = subs.map(s => {
+    const aud = s.endpoint.match(/^https:\/\/[^/]+/)[0];
+    jwts[aud] = jwts[aud] || vapidJwt_(aud);
+    let code = 0;
+    try {
+      code = UrlFetchApp.fetch(s.endpoint, {
+        method: 'post',
+        headers: { Authorization: 'vapid t=' + jwts[aud] + ', k=' + vapidPublicKey_(), TTL: '86400', Urgency: 'high' },
+        payload: '',
+        muteHttpExceptions: true,
+      }).getResponseCode();
+    } catch (err) { code = -1; }
+    return { endpoint: s.endpoint, code: code };
+  });
+  withLock_(() => {
+    const now = nowIso_();
+    const byEndpoint = {};
+    results.forEach(r => { byEndpoint[r.endpoint] = r.code; });
+    const rows = readTable_('push').map(stripRow_)
+      .filter(r => byEndpoint[r.endpoint] !== 404 && byEndpoint[r.endpoint] !== 410)
+      .map(r => (byEndpoint[r.endpoint] === undefined ? r : Object.assign(r, { lastSent: now, lastStatus: String(byEndpoint[r.endpoint]) })));
+    writeTable_('push', rows);
+  });
+  return results.filter(r => r.code >= 200 && r.code < 300).length;
+}
+
+function addDaysIso_(iso, n) {
+  const d = new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)) + n));
+  return d.toISOString().slice(0, 10);
+}
+
+// ---- VAPID (the key that lets this script send push messages), ES256 on curve P-256.
+
+const P256_ = {
+  p: BigInt('0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff'),
+  n: BigInt('0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551'),
+  g: [BigInt('0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296'),
+    BigInt('0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5')],
+};
+const B0_ = BigInt(0);
+const B1_ = BigInt(1);
+const B2_ = BigInt(2);
+const B3_ = BigInt(3);
+
+function vapidPublicKey_() {
+  const props = PropertiesService.getScriptProperties();
+  let pub = props.getProperty('VAPID_PUBLIC');
+  if (pub) return pub;
+  const seed = Utilities.getUuid() + Utilities.getUuid() + secret_() + Date.now();
+  const d = bytesToBig_(sha256_(seed)) % (P256_.n - B1_) + B1_;
+  const q = ecMul_(d, P256_.g);
+  pub = b64url_([4].concat(bigToBytes_(q[0]), bigToBytes_(q[1])));
+  props.setProperty('VAPID_PRIVATE', d.toString(16));
+  props.setProperty('VAPID_PUBLIC', pub);
+  return pub;
+}
+
+function vapidJwt_(audience) {
+  vapidPublicKey_();
+  const d = BigInt('0x' + PropertiesService.getScriptProperties().getProperty('VAPID_PRIVATE'));
+  const enc = (o) => b64url_(utf8Bytes_(JSON.stringify(o)));
+  const input = enc({ typ: 'JWT', alg: 'ES256' }) + '.' +
+    enc({ aud: audience, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: 'https://github.com/chrs-005/hp-app' });
+  return input + '.' + b64url_(ecdsaSign_(d, sha256_(input)));
+}
+
+/** ECDSA signature (r || s, 64 bytes) with a deterministic nonce (RFC 6979). */
+function ecdsaSign_(d, hash) {
+  const n = P256_.n;
+  const e = bytesToBig_(hash);
+  const x = bigToBytes_(d);
+  const h1 = bigToBytes_(e % n);
+  let v = new Array(32).fill(1);
+  let k = new Array(32).fill(0);
+  k = hmac_(k, v.concat([0], x, h1));
+  v = hmac_(k, v);
+  k = hmac_(k, v.concat([1], x, h1));
+  v = hmac_(k, v);
+  for (;;) {
+    v = hmac_(k, v);
+    const nonce = bytesToBig_(v);
+    if (nonce >= B1_ && nonce < n) {
+      const r = ecMul_(nonce, P256_.g)[0] % n;
+      const s = (modInv_(nonce, n) * (e + r * d)) % n;
+      if (r !== B0_ && s !== B0_) return bigToBytes_(r).concat(bigToBytes_(s));
+    }
+    k = hmac_(k, v.concat([0]));
+    v = hmac_(k, v);
+  }
+}
+
+function ecAdd_(a, b) {
+  const p = P256_.p;
+  if (!a) return b;
+  if (!b) return a;
+  let l;
+  if (a[0] === b[0]) {
+    if ((a[1] + b[1]) % p === B0_) return null;
+    l = mod_(B3_ * a[0] * a[0] - B3_, p) * modInv_(mod_(B2_ * a[1], p), p);   // curve a = -3
+  } else {
+    l = mod_(b[1] - a[1], p) * modInv_(mod_(b[0] - a[0], p), p);
+  }
+  l = mod_(l, p);
+  const x = mod_(l * l - a[0] - b[0], p);
+  return [x, mod_(l * (a[0] - x) - a[1], p)];
+}
+
+function ecMul_(k, point) {
+  let result = null;
+  let addend = point;
+  while (k > B0_) {
+    if (k & B1_) result = ecAdd_(result, addend);
+    addend = ecAdd_(addend, addend);
+    k = k >> B1_;
+  }
+  return result;
+}
+
+function mod_(a, m) {
+  const r = a % m;
+  return r < B0_ ? r + m : r;
+}
+
+function modInv_(a, m) {
+  let [oldR, r] = [mod_(a, m), m];
+  let [oldS, s] = [B1_, B0_];
+  while (r !== B0_) {
+    const q = oldR / r;
+    [oldR, r] = [r, oldR - q * r];
+    [oldS, s] = [s, oldS - q * s];
+  }
+  return mod_(oldS, m);
+}
+
+// Byte helpers. Apps Script uses signed bytes (-128..127); these work with 0..255.
+const toSigned_ = (bytes) => bytes.map(b => (b > 127 ? b - 256 : b));
+const toUnsigned_ = (bytes) => Array.prototype.map.call(bytes, b => b & 255);
+function sha256_(text) { return toUnsigned_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)); }
+function hmac_(key, data) { return toUnsigned_(Utilities.computeHmacSha256Signature(toSigned_(data), toSigned_(key))); }
+function utf8Bytes_(text) { return toUnsigned_(Utilities.newBlob(text).getBytes()); }
+function b64url_(bytes) { return Utilities.base64EncodeWebSafe(toSigned_(bytes)).replace(/=+$/, ''); }
+function bytesToBig_(bytes) { return BigInt('0x' + (bytes.map(b => (b < 16 ? '0' : '') + b.toString(16)).join('') || '0')); }
+function bigToBytes_(x) {
+  const hex = x.toString(16).padStart(64, '0');
+  const out = [];
+  for (let i = 0; i < 64; i += 2) out.push(parseInt(hex.slice(i, i + 2), 16));
+  return out;
 }
 
 // ---------------------------------------------------------------- auth
