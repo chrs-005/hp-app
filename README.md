@@ -57,7 +57,7 @@ GitHub Pages updates within a minute.
    in the members file; each gets a 4-digit PIN for his own patrol. Press **Send**
    next to each one (WhatsApp, SMS…) — PINs are shown only once.
 
-## 4. Install on the leaders' phones
+## 4. Install on the CP and SP phones
 
 Open the app link:
 
