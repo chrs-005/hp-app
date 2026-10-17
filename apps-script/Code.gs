@@ -17,6 +17,9 @@ const DB_SCHEMA = {
   events: ['id', 'title', 'kind', 'date', 'endDate', 'order', 'createdAt'],
   // Phones that turned on reminders (web push subscriptions).
   push: ['endpoint', 'reporterId', 'createdAt', 'lastSent', 'lastStatus'],
+  // Money (chief only): orders (troupe-wide or for one scout) and one line per scout / item.
+  orders: ['id', 'kind', 'title', 'price', 'note', 'createdAt', 'createdBy'],
+  orderLines: ['id', 'orderId', 'memberId', 'item', 'variant', 'qty', 'price', 'given', 'givenAt', 'paid', 'paidAt', 'updatedAt', 'updatedBy'],
   attendance: ['date', 'memberId', 'wedStatus', 'wedReason', 'wedBy', 'wedAt', 'satStatus', 'satReason', 'satBy', 'satAt'],
 };
 
@@ -27,6 +30,7 @@ const DEFAULT_SETTINGS = {
   minMeetings: 5,   // start judging percentages once this many Saturdays were held
   warnPct: 75,      // below this -> amber
   lowPct: 60,       // below this -> red
+  currency: '$',
 };
 
 const STATUSES = {
@@ -82,6 +86,12 @@ const ACTIONS = {
   savePush: savePush_,
   removePush: removePush_,
   testPush: testPush_,
+  saveOrder: saveOrder_,
+  addLines: addLines_,
+  updateLine: updateLine_,
+  setLines: setLines_,
+  deleteLines: deleteLines_,
+  deleteOrder: deleteOrder_,
 };
 
 // ---------------------------------------------------------------- actions
@@ -186,6 +196,7 @@ function state_(p, token) {
     } : null,
     membersSync: membersSync,
     reminders: isAdmin ? remindersOn_() : null,
+    money: isAdmin ? money_() : null,
     serverTime: nowIso_(),
   };
 }
@@ -275,6 +286,185 @@ function saveAttendance_(p, token) {
     });
     writeTable_('attendance', rows);
     return { rows: Object.keys(touched).map(k => touched[k]) };
+  });
+}
+
+// ---------------------------------------------------------------- money (chief only)
+// An order is either for the whole troupe (one line per scout, same item and price) or
+// for one scout (one line per item). Each line has two separate ticks: given and paid.
+
+function money_() {
+  const num = (v) => Number(v) || 0;
+  return {
+    orders: readTable_('orders').map(o => ({ id: o.id, kind: o.kind, title: o.title, price: num(o.price), note: o.note, createdAt: o.createdAt })),
+    lines: readTable_('orderLines').map(l => ({
+      id: l.id, orderId: l.orderId, memberId: l.memberId, item: l.item, variant: l.variant, qty: num(l.qty) || 1, price: num(l.price),
+      given: l.given === '1', givenAt: l.givenAt, paid: l.paid === '1', paidAt: l.paidAt,
+    })),
+  };
+}
+
+function cleanMoney_(v) {
+  const n = Math.round(Number(String(v == null ? '' : v).replace(',', '.')) * 100) / 100;
+  if (!(n >= 0) || n > 1e9) throw new Error('Bad price.');
+  return n;
+}
+
+function cleanItem_(it) {
+  const item = String(it.item || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  if (!item) throw new Error('Give each item a name.');
+  const qty = Math.round(Number(it.qty || 1));
+  if (!(qty >= 1 && qty <= 999)) throw new Error('Bad quantity.');
+  return { item: item, variant: String(it.variant || '').trim().slice(0, 30), qty: qty, price: cleanMoney_(it.price) };
+}
+
+function newLine_(orderId, memberId, it, me) {
+  return {
+    id: newId_('l'), orderId: orderId, memberId: memberId, item: it.item, variant: it.variant, qty: String(it.qty), price: String(it.price),
+    given: '', givenAt: '', paid: '', paidAt: '', updatedAt: nowIso_(), updatedBy: me.name,
+  };
+}
+
+function activeMemberIds_(ids) {
+  const ok = {};
+  readTable_('members').forEach(m => { if (m.active !== '0') ok[m.id] = true; });
+  return (Array.isArray(ids) ? ids : []).filter(id => ok[id]);
+}
+
+/**
+ * payload: { id?, kind: 'troupe'|'single', title, price, note, memberIds (troupe, new), memberId + items (single, new) }.
+ * Editing a troupe order also renames the item and moves the lines that still had the old price.
+ */
+function saveOrder_(p, token) {
+  const me = requireAdmin_(token);
+  const kind = p.kind === 'single' ? 'single' : 'troupe';
+  const title = String(p.title || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  const note = String(p.note || '').trim().slice(0, 300);
+  if (kind === 'troupe' && !title) throw new Error('Give the order a name (e.g. Prêt, Foulard).');
+  return withLock_(() => {
+    const orders = readTable_('orders').map(stripRow_);
+    const lines = readTable_('orderLines').map(stripRow_);
+    let o = p.id ? orders.find(x => x.id === p.id) : null;
+    if (p.id && !o) throw new Error('Order not found.');
+    if (!o) {
+      o = { id: newId_('o'), kind: kind, createdAt: nowIso_(), createdBy: me.name };
+      orders.push(o);
+      if (kind === 'troupe') {
+        const price = cleanMoney_(p.price);
+        const ids = activeMemberIds_(p.memberIds);
+        if (!ids.length) throw new Error('Choose at least one scout.');
+        ids.forEach(id => lines.push(newLine_(o.id, id, { item: title, variant: '', qty: 1, price: price }, me)));
+      } else {
+        if (!activeMemberIds_([p.memberId]).length) throw new Error('Choose the scout.');
+        const items = (Array.isArray(p.items) ? p.items : []).map(cleanItem_);
+        if (!items.length) throw new Error('Add at least one item.');
+        items.forEach(it => lines.push(newLine_(o.id, p.memberId, it, me)));
+      }
+    } else if (o.kind === 'troupe') {
+      const price = cleanMoney_(p.price);
+      lines.forEach(l => {
+        if (l.orderId !== o.id) return;
+        if (l.item === o.title) l.item = title;
+        if (Number(l.price) === Number(o.price)) l.price = String(price);
+      });
+    }
+    o.title = title;
+    o.note = note;
+    o.price = kind === 'troupe' ? String(cleanMoney_(p.price)) : '';
+    writeTable_('orders', orders);
+    writeTable_('orderLines', lines);
+    return Object.assign(money_(), { id: o.id });
+  });
+}
+
+/** Troupe order: { orderId, memberIds } adds scouts. Single order: { orderId, items } adds items. */
+function addLines_(p, token) {
+  const me = requireAdmin_(token);
+  return withLock_(() => {
+    const o = readTable_('orders').find(x => x.id === p.orderId);
+    if (!o) throw new Error('Order not found.');
+    const lines = readTable_('orderLines').map(stripRow_);
+    if (o.kind === 'troupe') {
+      const have = {};
+      lines.forEach(l => { if (l.orderId === o.id) have[l.memberId] = true; });
+      activeMemberIds_(p.memberIds).filter(id => !have[id])
+        .forEach(id => lines.push(newLine_(o.id, id, { item: o.title, variant: '', qty: 1, price: Number(o.price) || 0 }, me)));
+    } else {
+      const first = lines.find(l => l.orderId === o.id);
+      const memberId = first ? first.memberId : p.memberId;
+      if (!memberId) throw new Error('Choose the scout.');
+      (Array.isArray(p.items) ? p.items : []).map(cleanItem_).forEach(it => lines.push(newLine_(o.id, memberId, it, me)));
+    }
+    writeTable_('orderLines', lines);
+    return money_();
+  });
+}
+
+/** { id, given?, paid?, item?, variant?, qty?, price? } — returns just that line. */
+function updateLine_(p, token) {
+  const me = requireAdmin_(token);
+  return withLock_(() => {
+    const lines = readTable_('orderLines');
+    const l = lines.find(x => x.id === p.id);
+    if (!l) throw new Error('This line does not exist anymore. Refresh the app.');
+    const changes = { updatedAt: nowIso_(), updatedBy: me.name };
+    ['given', 'paid'].forEach(k => {
+      if (p[k] === undefined) return;
+      changes[k] = p[k] ? '1' : '';
+      changes[k + 'At'] = p[k] ? nowIso_() : '';
+    });
+    if (p.item !== undefined || p.variant !== undefined || p.qty !== undefined || p.price !== undefined) {
+      const it = cleanItem_({
+        item: p.item !== undefined ? p.item : l.item, variant: p.variant !== undefined ? p.variant : l.variant,
+        qty: p.qty !== undefined ? p.qty : l.qty, price: p.price !== undefined ? p.price : l.price,
+      });
+      Object.assign(changes, { item: it.item, variant: it.variant, qty: String(it.qty), price: String(it.price) });
+    }
+    updateRow_('orderLines', l._row, changes);
+    const fresh = money_().lines.find(x => x.id === p.id);
+    return { line: fresh };
+  });
+}
+
+/** Bulk tick: { ids, given?, paid? }. */
+function setLines_(p, token) {
+  const me = requireAdmin_(token);
+  const ids = {};
+  (Array.isArray(p.ids) ? p.ids : []).forEach(id => { ids[id] = true; });
+  return withLock_(() => {
+    const now = nowIso_();
+    const lines = readTable_('orderLines').map(stripRow_);
+    lines.forEach(l => {
+      if (!ids[l.id]) return;
+      ['given', 'paid'].forEach(k => {
+        if (p[k] === undefined || (l[k] === '1') === !!p[k]) return;
+        l[k] = p[k] ? '1' : '';
+        l[k + 'At'] = p[k] ? now : '';
+      });
+      l.updatedAt = now;
+      l.updatedBy = me.name;
+    });
+    writeTable_('orderLines', lines);
+    return money_();
+  });
+}
+
+function deleteLines_(p, token) {
+  requireAdmin_(token);
+  const ids = {};
+  (Array.isArray(p.ids) ? p.ids : []).forEach(id => { ids[id] = true; });
+  return withLock_(() => {
+    writeTable_('orderLines', readTable_('orderLines').map(stripRow_).filter(l => !ids[l.id]));
+    return money_();
+  });
+}
+
+function deleteOrder_(p, token) {
+  requireAdmin_(token);
+  return withLock_(() => {
+    writeTable_('orders', readTable_('orders').map(stripRow_).filter(o => o.id !== p.id));
+    writeTable_('orderLines', readTable_('orderLines').map(stripRow_).filter(l => l.orderId !== p.id));
+    return money_();
   });
 }
 
@@ -399,6 +589,7 @@ function saveSettings_(p, token) {
   requireAdmin_(token);
   const s = {};
   if (p.teamName !== undefined) s.teamName = String(p.teamName).trim().slice(0, 60) || DEFAULT_SETTINGS.teamName;
+  if (p.currency !== undefined) s.currency = String(p.currency).trim().slice(0, 6) || DEFAULT_SETTINGS.currency;
   if (p.seasonStart !== undefined) {
     if (!isIsoDate_(p.seasonStart)) throw new Error('Season start must be a date.');
     s.seasonStart = p.seasonStart;

@@ -63,6 +63,16 @@
     call('saveAttendance', { entries: members.slice(0, 15).map((m, i) => ({
       date: evs[1].id, memberId: m.id, phase: 'wed', status: i % 5 === 2 ? 'out' : 'coming', reason: i % 5 === 2 ? 'Travelling' : '',
     })) }, token);
+    // Money: a troupe order (Prêt) half handed out, and one scout's single order.
+    let mon = call('saveOrder', { kind: 'troupe', title: 'Prêt', price: 12, memberIds: members.map(m => m.id) }, token);
+    const pret = mon.lines.filter(l => l.orderId === mon.id);
+    call('setLines', { ids: pret.filter((l, i) => i % 3 !== 0).map(l => l.id), given: true }, token);
+    call('setLines', { ids: pret.filter((l, i) => i % 4 !== 1).map(l => l.id), paid: true }, token);
+    mon = call('saveOrder', { kind: 'single', memberId: members[4].id, items: [
+      { item: 'Chemise', variant: 'S', price: 25 }, { item: 'Ceinture', variant: '110', price: 8 }] }, token);
+    const single = mon.lines.filter(l => l.orderId === mon.id);
+    call('setLines', { ids: single.map(l => l.id), paid: true }, token);
+    call('updateLine', { id: single[1].id, given: true }, token);
     return { token: token };
   }
 

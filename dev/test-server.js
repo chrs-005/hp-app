@@ -297,6 +297,59 @@ assert.strictEqual(c6('testPush', {}, bisonTok).sent, 1);
 c6('removePush', { endpoint: 'https://updates.push.services.mozilla.com/bison' }, bisonTok);
 assert.match(s6.api({ action: 'testPush', payload: {}, token: bisonTok }).error, /Turn on reminders/);
 
+// ---- Money (chief only): troupe orders, single orders, given / paid.
+const st7 = c3('state', {}, setup3.token);
+assert.deepStrictEqual(st7.money, { orders: [], lines: [] });
+const everyone = st7.members.filter(m => m.active).map(m => m.id);
+let mon = c3('saveOrder', { kind: 'troupe', title: 'Prêt', price: '12.5', memberIds: everyone }, setup3.token);
+const pret = mon.id;
+assert.strictEqual(mon.lines.filter(l => l.orderId === pret).length, everyone.length);
+assert.ok(mon.lines.every(l => l.price === 12.5 && l.qty === 1 && !l.given && !l.paid && l.item === 'Prêt'));
+const pl = mon.lines.filter(l => l.orderId === pret);
+let up = c3('updateLine', { id: pl[0].id, given: true }, setup3.token).line;
+assert.ok(up.given && up.givenAt && !up.paid);
+up = c3('updateLine', { id: pl[0].id, paid: true, variant: 'M' }, setup3.token).line;
+assert.ok(up.given && up.paid && up.variant === 'M');
+c3('updateLine', { id: pl[1].id, price: '10' }, setup3.token);                     // a discount for one scout
+mon = c3('setLines', { ids: pl.slice(2, 6).map(l => l.id), paid: true }, setup3.token);
+assert.strictEqual(mon.lines.filter(l => l.orderId === pret && l.paid).length, 5);
+// Renaming / repricing the order moves only the lines that still had the old price.
+mon = c3('saveOrder', { id: pret, kind: 'troupe', title: 'Prêt 2026', price: '15', note: '' }, setup3.token);
+const pl2 = mon.lines.filter(l => l.orderId === pret);
+assert.ok(pl2.every(l => l.item === 'Prêt 2026'));
+assert.strictEqual(pl2.find(l => l.id === pl[1].id).price, 10);
+assert.strictEqual(pl2.find(l => l.id === pl[0].id).price, 15);
+// Remove one scout, add him back (no duplicates).
+mon = c3('deleteLines', { ids: [pl[3].id] }, setup3.token);
+mon = c3('addLines', { orderId: pret, memberIds: everyone }, setup3.token);
+assert.strictEqual(mon.lines.filter(l => l.orderId === pret).length, everyone.length);
+// Single order: Chemise S (paid, not found yet) + Ceinture 110 (paid and given).
+mon = c3('saveOrder', { kind: 'single', memberId: everyone[4], items: [
+  { item: 'Chemise', variant: 'S', price: '25' }, { item: 'Ceinture', variant: '110', price: '8', qty: 1 }] }, setup3.token);
+const single = mon.id;
+const sl = mon.lines.filter(l => l.orderId === single);
+assert.deepStrictEqual(sl.map(l => l.item + ' ' + l.variant), ['Chemise S', 'Ceinture 110']);
+assert.ok(sl.every(l => l.memberId === everyone[4]));
+c3('setLines', { ids: sl.map(l => l.id), paid: true }, setup3.token);
+c3('updateLine', { id: sl[1].id, given: true }, setup3.token);
+mon = c3('addLines', { orderId: single, items: [{ item: 'Badge', price: '2', qty: 3 }] }, setup3.token);
+assert.strictEqual(mon.lines.filter(l => l.orderId === single).length, 3);
+assert.strictEqual(mon.lines.find(l => l.item === 'Badge').qty, 3);
+assert.match(s3.api({ action: 'saveOrder', payload: { kind: 'single', memberId: everyone[4], items: [{ item: 'X', price: '-3' }] }, token: setup3.token }).error, /Bad price/);
+assert.match(s3.api({ action: 'saveOrder', payload: { kind: 'troupe', title: '', price: 1, memberIds: everyone }, token: setup3.token }).error, /name/);
+assert.match(s3.api({ action: 'saveOrder', payload: { kind: 'single', memberId: 'nobody', items: [{ item: 'X', price: 1 }] }, token: setup3.token }).error, /Choose the scout/);
+// CP / SP cannot see or touch money.
+const cpTok = c3('login', { name: 'Chief Two', pin: '1111' }).token;   // chief: allowed
+assert.ok(c3('state', {}, cpTok).money);
+c3('saveReporter', { name: 'Simple Cp', pin: '2222', role: 'cp', patrols: ['Panda'] }, setup3.token);
+const simpleTok = c3('login', { name: 'Simple Cp', pin: '2222' }).token;
+assert.strictEqual(c3('state', {}, simpleTok).money, null);
+assert.match(s3.api({ action: 'updateLine', payload: { id: sl[0].id, given: true }, token: simpleTok }).error, /Only the chief/);
+// Delete the single order with its lines.
+mon = c3('deleteOrder', { id: single }, setup3.token);
+assert.strictEqual(mon.lines.filter(l => l.orderId === single).length, 0);
+assert.strictEqual(ok(s3.api({ action: 'saveSettings', payload: { currency: 'LBP' }, token: setup3.token })).settings.currency, 'LBP');
+
 // Setup with a bad link still creates the chief and reports the problem.
 const f4 = makeFakes({ source: source, standalone: true });
 const s4 = loadServer(code, f4);

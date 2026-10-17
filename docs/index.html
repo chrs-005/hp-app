@@ -410,6 +410,40 @@ label.field + label.field { margin-top: 12px; }
 .gtip-said { color: var(--text-2); font-size: 12.5px; }
 .gtip-said.bad { color: var(--bad-ink); font-weight: 700; }
 
+/* ---------- money ---------- */
+.ocard { display: block; width: 100%; text-align: left; padding: 14px 16px; color: inherit; font: inherit; cursor: pointer; }
+.ocard:hover { border-color: var(--accent); }
+.ocard .oc-top { display: flex; align-items: baseline; gap: 8px; }
+.ocard h3 { flex: 1; min-width: 0; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ocard .oc-sub { font-size: 13px; color: var(--text-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ocard .oc-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.mline { display: flex; align-items: center; gap: 10px; padding: 10px 14px 10px 12px; border-left: 4px solid transparent; }
+.mline + .mline { border-top: 1px solid var(--hair); }
+.mline.st-owes { border-left-color: var(--bad); }
+.mline.st-give { border-left-color: var(--warn); }
+.mline.st-done { border-left-color: var(--good); }
+.ml-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: none; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.ml-txt { min-width: 0; }
+.ml-txt b { display: block; font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ml-txt > span { display: block; font-size: 12.5px; color: var(--text-2); }
+.ml-txt .st { font-weight: 700; }
+.ml-txt .st.bad { color: var(--bad-ink); } .ml-txt .st.warn { color: var(--warn-ink); } .ml-txt .st.good { color: var(--good-ink); }
+.ml-ticks { display: flex; gap: 6px; flex: none; }
+.tick { min-height: 42px; min-width: 76px; padding: 0 10px; border-radius: 11px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); font-weight: 650; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.tick .ic { opacity: .25; }
+.tick[aria-pressed="true"] .ic { opacity: 1; }
+.tick[data-tick="given"][aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent); }
+.tick[data-tick="paid"][aria-pressed="true"] { background: var(--good-soft); color: var(--good-ink); border-color: var(--good); }
+@media (max-width: 380px) { .tick { min-width: 64px; padding: 0 6px; } .tick .ic { display: none; } }
+.irow { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, .9fr) 58px minmax(0, .9fr) 40px; gap: 6px; align-items: end; margin-top: 8px; }
+.irow .input { margin-top: 4px; min-height: 42px; padding: 8px 10px; }
+.irow label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.pick-list { max-height: 50vh; overflow: auto; margin-top: 10px; border: 1px solid var(--border); border-radius: 12px; }
+.pick-list label { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--hair); font-weight: 600; font-size: 14px; }
+.pick-list label:first-child { border-top: 0; }
+.pick-list input { width: 18px; height: 18px; accent-color: var(--accent); }
+.pick-list .pl-head { background: var(--surface-2); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+
 /* ---------- admin ---------- */
 .rep { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
 .rep + .rep { border-top: 1px solid var(--hair); }
@@ -508,6 +542,8 @@ const ICONS = {
   alert: '<path d="M12 4 2.8 19.5h18.4zM12 10v4.2M12 17.2v.1"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  money: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v5M18 9.5v5"/>',
+  back: '<path d="M14.5 6l-6 6 6 6"/>',
   grid: '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 3.5v17"/>',
   download: '<path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/>',
 };
@@ -623,6 +659,7 @@ const S = {
 function indexData() {
   const D = S.data;
   D.events = D.events || [];   // older server version without camps / events
+  D.money = D.money || { orders: [], lines: [] };
   S.att = new Map();
   D.attendance.forEach(a => S.att.set(a.date + '|' + a.memberId, a));
   S.patrolIdx = new Map(D.patrols.map((p, i) => [p, i]));
@@ -1065,6 +1102,7 @@ const TABS = [
   { id: 'presence', label: 'Presence', icon: 'presence', render: renderPresence },
   { id: 'overview', label: 'Overview', icon: 'grid', render: renderOverview, admin: true },
   { id: 'stats', label: 'Stats', icon: 'stats', render: renderStats, admin: true },
+  { id: 'money', label: 'Money', icon: 'money', render: renderMoney, admin: true },
   { id: 'admin', label: 'Admin', icon: 'admin', render: renderAdmin, admin: true },
 ];
 const visibleTabs = () => TABS.filter(t => !t.admin || isAdmin());
@@ -1531,6 +1569,390 @@ function redrawRow(id) {
   old.replaceWith(tmp.firstChild);
 }
 
+// =================================================================== MONEY (chief): orders, given / paid
+const money = () => S.data.money;
+function fmtMoney(n) {
+  const c = S.data.settings.currency || '$';
+  const v = (Math.round((n || 0) * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return /^[$€£]$/.test(c) ? c + v : v + ' ' + c;
+}
+const lineTotal = (l) => l.price * (l.qty || 1);
+const lineState = (l) => (l.given && l.paid ? 'done' : l.given ? 'owes' : l.paid ? 'give' : 'open');
+const LINE_STATES = {
+  done: { label: 'Done', tone: 'good' },
+  owes: { label: 'Owes money', tone: 'bad' },
+  give: { label: 'To give', tone: 'warn' },
+  open: { label: 'Not given · not paid', tone: 'none' },
+};
+function moneySums(lines) {
+  const s = { n: lines.length, total: 0, paid: 0, paidN: 0, givenN: 0, owed: 0, owesN: 0, toGiveN: 0 };
+  lines.forEach(l => {
+    const t = lineTotal(l);
+    s.total += t;
+    if (l.paid) { s.paid += t; s.paidN++; }
+    if (l.given) s.givenN++;
+    if (l.given && !l.paid) { s.owed += t; s.owesN++; }
+    if (l.paid && !l.given) s.toGiveN++;
+  });
+  return s;
+}
+const memberOf = (id) => S.data.members.find(m => m.id === id) || { id: id, name: '(no longer on the list)', patrol: '', leader: '' };
+const orderLines = (orderId) => money().lines.filter(l => l.orderId === orderId);
+const orderTitle = (o) => (o.kind === 'troupe' ? o.title : memberOf((orderLines(o.id)[0] || {}).memberId).name);
+const itemNames = () => Array.from(new Set(money().lines.map(l => l.item).concat(money().orders.map(o => o.title)).filter(Boolean))).sort();
+const lineLabel = (l) => l.item + (l.variant ? ' ' + l.variant : '');
+
+function renderMoney(v) {
+  const M = S.moneyView || (S.moneyView = { view: 'orders', orderId: null, filter: 'all', patrol: 'all' });
+  if (M.orderId && !money().orders.some(o => o.id === M.orderId)) M.orderId = null;
+  if (M.orderId) { renderOrder(v, M); return; }
+  const all = moneySums(money().lines);
+
+  let html =
+    '<div><h1>Money</h1><p class="sub">What you bought for the scouts: who got it, who paid.</p></div>' +
+    '<div class="kpis">' +
+      kpi('They owe you', fmtMoney(all.owed), plural(all.owesN, 'item') + ' given, not paid') +
+      kpi('Collected', fmtMoney(all.paid), 'of ' + fmtMoney(all.total)) +
+      kpi('To give', all.toGiveN, 'paid, not given yet') +
+      kpi('Orders', money().orders.length, plural(all.n, 'line')) +
+    '</div>' +
+    '<div class="row" style="justify-content:space-between">' +
+      '<div class="seg seg-mode" role="tablist" style="flex:1;min-width:240px">' +
+        '<button role="tab" data-mview="orders" aria-selected="' + (M.view === 'orders') + '">Orders</button>' +
+        '<button role="tab" data-mview="scouts" aria-selected="' + (M.view === 'scouts') + '">By scout</button>' +
+      '</div>' +
+      '<div class="row"><button class="btn sm primary" id="newTroupe">' + icon('plus', 'sm') + 'Troupe order</button>' +
+        '<button class="btn sm" id="newSingle">' + icon('plus', 'sm') + 'Single order</button></div>' +
+    '</div>';
+
+  if (M.view === 'orders') {
+    const orders = money().orders.slice().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    html += orders.length ? '<div class="grid-2">' + orders.map(o => {
+      const ls = orderLines(o.id);
+      const s = moneySums(ls);
+      const sub = o.kind === 'troupe'
+        ? fmtMoney(o.price) + ' each · ' + plural(s.n, 'scout')
+        : ls.map(l => (l.qty > 1 ? l.qty + '× ' : '') + lineLabel(l)).join(' · ');
+      return '<button class="card ocard" data-order="' + esc(o.id) + '">' +
+        '<div class="oc-top"><h3>' + esc(orderTitle(o)) + '</h3><span class="pill">' + (o.kind === 'troupe' ? 'Troupe' : 'Single') + '</span></div>' +
+        '<div class="oc-sub">' + esc(sub) + '</div>' +
+        '<div class="progress" style="margin:10px 0 0"><span class="good" style="width:' + (s.n ? s.paidN / s.n * 100 : 0) + '%"></span></div>' +
+        '<div class="oc-pills"><span class="pill">Given <b>' + s.givenN + '/' + s.n + '</b></span><span class="pill">Paid <b>' + s.paidN + '/' + s.n + '</b></span>' +
+          (s.owed ? '<span class="pill bad">Owes ' + esc(fmtMoney(s.owed)) + '</span>' : '') +
+          (s.toGiveN ? '<span class="pill warn">To give ' + s.toGiveN + '</span>' : '') +
+          (s.n && s.paidN === s.n && s.givenN === s.n ? '<span class="pill good">' + icon('check', 'sm') + 'All done</span>' : '') +
+        '</div></button>';
+    }).join('') + '</div>' : '<div class="card empty">No orders yet. Create a troupe order (the same item for many scouts) or a single order (items for one scout).</div>';
+  } else {
+    const byMember = new Map();
+    money().lines.forEach(l => { if (!byMember.has(l.memberId)) byMember.set(l.memberId, []); byMember.get(l.memberId).push(l); });
+    const rows = Array.from(byMember.entries()).map(([id, ls]) => ({ m: memberOf(id), s: moneySums(ls) }))
+      .sort((a, b) => (b.s.owed - a.s.owed) || (b.s.toGiveN - a.s.toGiveN) || a.m.name.localeCompare(b.m.name));
+    html += '<section class="card"><div class="card-body" style="padding:6px">' + (rows.length ? rows.map(r =>
+      '<button class="att-item" style="background:none;--pc:' + patrolColor(r.m.patrol) + '" data-mscout="' + esc(r.m.id) + '">' +
+        '<span class="avatar">' + esc(initials(r.m.name)) + '</span>' +
+        '<span class="grow"><b>' + esc(r.m.name) + '</b><span>' + esc(r.m.patrol) + ' · ' + plural(r.s.n, 'item') + ' · paid ' + esc(fmtMoney(r.s.paid)) + '</span></span>' +
+        (r.s.owed ? '<span class="pill bad">Owes ' + esc(fmtMoney(r.s.owed)) + '</span>' : '') +
+        (r.s.toGiveN ? '<span class="pill warn">To give ' + r.s.toGiveN + '</span>' : '') +
+        (!r.s.owed && !r.s.toGiveN ? '<span class="pill good">Settled</span>' : '') +
+      '</button>').join('') : '<p class="empty">Nothing yet.</p>') + '</div></section>';
+  }
+  v.innerHTML = html;
+  $$('[data-mview]', v).forEach(b => { b.onclick = () => { M.view = b.dataset.mview; renderMoney(v); }; });
+  $$('[data-order]', v).forEach(b => { b.onclick = () => { M.orderId = b.dataset.order; M.filter = 'all'; M.patrol = 'all'; renderMoney(v); window.scrollTo(0, 0); }; });
+  $$('[data-mscout]', v).forEach(b => { b.onclick = () => openScoutMoney(b.dataset.mscout); });
+  $('#newTroupe', v).onclick = () => editOrder({ kind: 'troupe' });
+  $('#newSingle', v).onclick = () => editOrder({ kind: 'single' });
+}
+
+function lineRowHtml(l, label, sub) {
+  const st = lineState(l);
+  const m = memberOf(l.memberId);
+  return '<div class="mline st-' + st + '" data-line="' + esc(l.id) + '" style="--pc:' + patrolColor(m.patrol) + '">' +
+    '<button class="ml-main" data-ledit="' + esc(l.id) + '"><span class="avatar">' + esc(initials(m.name)) + '</span>' +
+      '<span class="ml-txt"><b>' + esc(label) + '</b><span>' + esc(sub) + (st !== 'open' ? ' · <span class="st ' + LINE_STATES[st].tone + '">' + LINE_STATES[st].label + '</span>' : '') + '</span></span></button>' +
+    '<div class="ml-ticks">' +
+      '<button class="tick" data-tick="given" aria-pressed="' + l.given + '">' + icon('check', 'sm') + 'Given</button>' +
+      '<button class="tick" data-tick="paid" aria-pressed="' + l.paid + '">' + icon('check', 'sm') + 'Paid</button>' +
+    '</div></div>';
+}
+
+/** Ticks and line editing inside any list of lines. rerender() redraws the list after a change. */
+function wireLines(el, rerender) {
+  el.addEventListener('click', (e) => {
+    const tick = e.target.closest('[data-tick]');
+    if (tick) { toggleLine(tick.closest('[data-line]').dataset.line, tick.dataset.tick, rerender); return; }
+    const ed = e.target.closest('[data-ledit]');
+    if (ed) editLine(money().lines.find(l => l.id === ed.dataset.ledit), rerender);
+  });
+}
+
+async function toggleLine(id, field, rerender) {
+  const l = money().lines.find(x => x.id === id);
+  if (!l) return;
+  const val = !l[field];
+  l[field] = val;
+  rerender();
+  try {
+    const res = await call('updateLine', { id: id, [field]: val });
+    if (res.line && l[field] === val) Object.assign(l, res.line);
+  } catch (e) {
+    l[field] = !val;
+    rerender();
+    toast(e.message, 'bad');
+  }
+}
+
+function renderOrder(v, M) {
+  const o = money().orders.find(x => x.id === M.orderId);
+  const ls = orderLines(o.id);
+  const s = moneySums(ls);
+  const troupe = o.kind === 'troupe';
+  const FILTERS = [['all', 'All'], ['owes', 'Owes money'], ['give', 'To give'], ['notgiven', 'Not given'], ['notpaid', 'Not paid'], ['done', 'Done']];
+  const match = (l) => (M.filter === 'all' || (M.filter === 'notgiven' ? !l.given : M.filter === 'notpaid' ? !l.paid : lineState(l) === M.filter)) &&
+    (M.patrol === 'all' || memberOf(l.memberId).patrol === M.patrol);
+  const shown = ls.filter(match).sort((a, b) => {
+    const ma = memberOf(a.memberId), mb = memberOf(b.memberId);
+    return (patrolRank(ma.patrol) - patrolRank(mb.patrol)) || ((ma.order || 0) - (mb.order || 0)) || ma.name.localeCompare(mb.name);
+  });
+  const sub = troupe ? fmtMoney(o.price) + ' each · ' + plural(s.n, 'scout') : 'Single order · ' + memberOf((ls[0] || {}).memberId).patrol;
+  const patrolsIn = S.data.patrols.filter(p => ls.some(l => memberOf(l.memberId).patrol === p));
+
+  let html =
+    '<button class="btn ghost sm" id="mBack" style="padding-left:0">' + icon('back', 'sm') + 'All orders</button>' +
+    '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>' + esc(orderTitle(o)) + '</h1><p class="sub">' + esc(sub) + '</p>' +
+      (o.note ? '<p class="small muted" style="margin-top:4px">' + esc(o.note) + '</p>' : '') + '</div>' +
+      '<div class="row"><button class="btn sm" id="oEdit">Edit</button><button class="btn sm" id="oCsv">' + icon('download', 'sm') + 'CSV</button><button class="btn sm danger" id="oDel">Delete</button></div></div>' +
+    '<div class="sum-pills"><span class="pill">Given <b>' + s.givenN + '/' + s.n + '</b></span><span class="pill">Paid <b>' + s.paidN + '/' + s.n + '</b></span>' +
+      '<span class="pill good">Collected ' + esc(fmtMoney(s.paid)) + ' / ' + esc(fmtMoney(s.total)) + '</span>' +
+      (s.owed ? '<span class="pill bad">Owes ' + esc(fmtMoney(s.owed)) + '</span>' : '') + (s.toGiveN ? '<span class="pill warn">To give ' + s.toGiveN + '</span>' : '') + '</div>';
+  if (troupe) {
+    html += '<div class="chips">' + FILTERS.map(f => '<button class="chip" data-mfilter="' + f[0] + '" aria-pressed="' + (M.filter === f[0]) + '">' + f[1] + '</button>').join('') + '</div>' +
+      (patrolsIn.length > 1 ? '<div class="chips">' + ['all'].concat(patrolsIn).map(p =>
+        '<button class="chip" data-mpatrol="' + esc(p) + '" aria-pressed="' + (M.patrol === p) + '" style="--pc:' + (p === 'all' ? 'var(--none)' : patrolColor(p)) + '">' +
+        (p === 'all' ? 'All patrols' : '<span class="pdot"></span>' + esc(p)) + '</button>').join('') + '</div>' : '') +
+      '<div class="row"><button class="btn sm" id="bulkGiven"' + (shown.some(l => !l.given) ? '' : ' disabled') + '>Mark the ' + shown.filter(l => !l.given).length + ' shown as given</button>' +
+        '<button class="btn sm" id="bulkPaid"' + (shown.some(l => !l.paid) ? '' : ' disabled') + '>Mark the ' + shown.filter(l => !l.paid).length + ' shown as paid</button>' +
+        '<button class="btn sm" id="addScouts">' + icon('plus', 'sm') + 'Add scouts</button></div>';
+  }
+  html += '<section class="card" id="oLines">' + (shown.length
+    ? shown.map(l => troupe
+      ? lineRowHtml(l, memberOf(l.memberId).name, (l.variant ? 'Size ' + l.variant + ' · ' : '') + (lineTotal(l) !== o.price ? fmtMoney(lineTotal(l)) + ' · ' : '') + memberOf(l.memberId).patrol)
+      : lineRowHtml(l, lineLabel(l), (l.qty > 1 ? l.qty + ' × ' + fmtMoney(l.price) + ' = ' : '') + fmtMoney(lineTotal(l)))).join('')
+    : '<p class="empty">Nobody here.</p>') + '</section>' +
+    (troupe ? '' : '<button class="btn" id="addItem">' + icon('plus', 'sm') + 'Add an item</button>');
+  v.innerHTML = html;
+
+  const again = () => { const y = window.scrollY; renderOrder(v, M); window.scrollTo(0, y); };
+  $('#mBack', v).onclick = () => { M.orderId = null; renderMoney(v); };
+  $('#oEdit', v).onclick = () => editOrder(o);
+  $('#oDel', v).onclick = async () => {
+    if (!await confirmBox('Delete "' + orderTitle(o) + '"?', 'All its lines (who got it, who paid) are deleted too.', 'Delete', true)) return;
+    try { S.data.money = await call('deleteOrder', { id: o.id }); M.orderId = null; renderMoney(v); toast('Order deleted'); } catch (e) { toast(e.message, 'bad'); }
+  };
+  $('#oCsv', v).onclick = () => {
+    const q = (x) => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
+    downloadCsv([['Scout', 'Patrol', 'Item', 'Size', 'Qty', 'Price', 'Total', 'Given', 'Paid'].map(q).join(',')].concat(ls.map(l => {
+      const m = memberOf(l.memberId);
+      return [m.name, m.patrol, l.item, l.variant, l.qty, l.price, lineTotal(l), l.given ? 'yes' : '', l.paid ? 'yes' : ''].map(q).join(',');
+    })), 'order-' + nameKey(orderTitle(o)) + '.csv');
+  };
+  $$('[data-mfilter]', v).forEach(b => { b.onclick = () => { M.filter = b.dataset.mfilter; again(); }; });
+  $$('[data-mpatrol]', v).forEach(b => { b.onclick = () => { M.patrol = b.dataset.mpatrol; again(); }; });
+  const bulk = async (field) => {
+    const ids = shown.filter(l => !l[field]).map(l => l.id);
+    if (!ids.length) return;
+    if (!await confirmBox('Mark ' + ids.length + ' as ' + field + '?', 'Only the scouts shown in the list now.', 'Mark ' + ids.length)) return;
+    try { S.data.money = await call('setLines', { ids: ids, [field]: true }); again(); } catch (e) { toast(e.message, 'bad'); }
+  };
+  if ($('#bulkGiven', v)) $('#bulkGiven', v).onclick = () => bulk('given');
+  if ($('#bulkPaid', v)) $('#bulkPaid', v).onclick = () => bulk('paid');
+  if ($('#addScouts', v)) $('#addScouts', v).onclick = () => addScoutsToOrder(o, again);
+  if ($('#addItem', v)) $('#addItem', v).onclick = () => addItemsToOrder(o, again);
+  wireLines($('#oLines', v), again);
+}
+
+function itemDatalist() {
+  return '<datalist id="itemNames">' + itemNames().map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>';
+}
+function itemRowHtml(it) {
+  it = it || {};
+  return '<div class="irow">' +
+    '<label>Item<input class="input" name="item" list="itemNames" maxlength="60" placeholder="Chemise" value="' + esc(it.item || '') + '"></label>' +
+    '<label>Size<input class="input" name="variant" maxlength="30" placeholder="S / 110" value="' + esc(it.variant || '') + '"></label>' +
+    '<label>Qty<input class="input" name="qty" type="number" inputmode="numeric" min="1" value="' + esc(it.qty || 1) + '"></label>' +
+    '<label>Price<input class="input" name="price" type="number" inputmode="decimal" min="0" step="0.01" value="' + esc(it.price != null ? it.price : '') + '"></label>' +
+    '<button type="button" class="icon-btn" data-rmrow aria-label="Remove">' + icon('x', 'sm') + '</button></div>';
+}
+function readItemRows(root) {
+  return $$('.irow', root).map(r => ({
+    item: $('[name=item]', r).value, variant: $('[name=variant]', r).value, qty: $('[name=qty]', r).value, price: $('[name=price]', r).value,
+  })).filter(it => it.item.trim() || it.price !== '');
+}
+function wireItemRows(root) {
+  root.addEventListener('click', (e) => {
+    const rm = e.target.closest('[data-rmrow]');
+    if (rm && $$('.irow', root).length > 1) rm.closest('.irow').remove();
+  });
+}
+function memberSelectHtml(selected) {
+  return '<select class="input" name="memberId" required><option value="">Choose a scout…</option>' + S.data.patrols.map(p =>
+    '<optgroup label="' + esc(p) + '">' + activeMembers([p]).map(m => '<option value="' + esc(m.id) + '"' + (m.id === selected ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('') + '</optgroup>').join('') + '</select>';
+}
+
+/** New / edit order. o = { kind } for a new one, or an existing order. */
+function editOrder(o, presetMember) {
+  const isNew = !o.id;
+  const troupe = o.kind === 'troupe';
+  let body;
+  if (troupe) {
+    body = '<label class="field">Item<input class="input" name="title" list="itemNames" maxlength="60" required placeholder="e.g. Prêt, Foulard, Badge" value="' + esc(o.title || '') + '"></label>' +
+      '<label class="field">Price for each scout<input class="input" name="price" type="number" inputmode="decimal" min="0" step="0.01" required value="' + esc(o.price != null ? o.price : '') + '"></label>' +
+      (isNew ? '<div class="field" style="margin-top:12px;font-size:13px;font-weight:600;color:var(--text-2)">For which patrols? (you can add or remove scouts later)</div>' +
+        '<div class="check-grid">' + S.data.patrols.map(p => '<label class="check"><input type="checkbox" name="patrols" value="' + esc(p) + '" checked><span class="pdot" style="--pc:' + patrolColor(p) + '"></span>' + esc(p) + '</label>').join('') + '</div>'
+        : '<p class="muted small" style="margin-top:6px">Changing the price updates every scout who still had the old price.</p>');
+  } else {
+    body = (isNew ? '<label class="field">Scout' + memberSelectHtml(presetMember) + '</label>' +
+      '<div class="field" style="margin-top:12px;font-size:13px;font-weight:600;color:var(--text-2)">Items</div><div id="iRows">' + itemRowHtml() + '</div>' +
+      '<button type="button" class="btn sm" id="moreRow" style="margin-top:8px">' + icon('plus', 'sm') + 'Another item</button>' : '');
+  }
+  body += '<label class="field" style="margin-top:12px">Note (optional)<input class="input" name="note" maxlength="300" value="' + esc(o.note || '') + '"></label>';
+  openModal('<h2>' + (isNew ? (troupe ? 'New troupe order' : 'New single order') : 'Edit order') + '</h2>' +
+    '<p class="sub">' + (troupe ? 'The same item for many scouts, e.g. 50 Prêt.' : 'Items ordered by one scout, each with its size and price.') + '</p>' +
+    '<form id="oForm" style="margin-top:14px">' + body + itemDatalist() + '<p class="err" id="oErr"></p>' +
+    '<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">' + (isNew ? 'Create' : 'Save') + '</button></div></form>', {
+    wide: !troupe,
+    onMount: (m, close) => {
+      const f = $('#oForm', m);
+      if ($('#iRows', m)) {
+        wireItemRows($('#iRows', m));
+        $('#moreRow', m).onclick = () => { $('#iRows', m).insertAdjacentHTML('beforeend', itemRowHtml()); };
+      }
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        const payload = { id: o.id, kind: o.kind, note: f.elements.note.value };
+        if (troupe) {
+          payload.title = f.elements.title.value;
+          payload.price = f.elements.price.value;
+          if (isNew) {
+            const pats = $$('input[name=patrols]:checked', f).map(x => x.value);
+            payload.memberIds = activeMembers(pats).map(x => x.id);
+          }
+        } else if (isNew) {
+          payload.memberId = f.elements.memberId.value;
+          payload.items = readItemRows(m);
+        }
+        try {
+          const res = await call('saveOrder', payload);
+          S.data.money = { orders: res.orders, lines: res.lines };
+          close();
+          toast(isNew ? 'Order created' : 'Saved');
+          S.moneyView = Object.assign(S.moneyView || {}, { orderId: res.id, filter: 'all', patrol: 'all' });
+          go('money');
+        } catch (err) { $('#oErr', m).textContent = err.message; }
+      };
+    },
+  });
+}
+
+function addScoutsToOrder(o, done) {
+  const have = new Set(orderLines(o.id).map(l => l.memberId));
+  const missing = activeMembers().filter(m => !have.has(m.id));
+  if (!missing.length) { toast('Every scout is already in this order'); return; }
+  openModal('<h2>Add scouts to ' + esc(o.title) + '</h2><p class="sub">They get it at ' + esc(fmtMoney(o.price)) + '.</p>' +
+    '<div class="pick-list">' + S.data.patrols.map(p => {
+      const ms = missing.filter(m => m.patrol === p);
+      return ms.length ? '<label class="pl-head">' + esc(p) + '</label>' + ms.map(m => '<label><input type="checkbox" value="' + esc(m.id) + '">' + esc(m.name) + '</label>').join('') : '';
+    }).join('') + '</div>' +
+    '<div class="modal-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" data-ok>Add</button></div>', {
+    onMount: (m, close) => {
+      $('[data-ok]', m).onclick = async () => {
+        const ids = $$('.pick-list input:checked', m).map(x => x.value);
+        if (!ids.length) { close(); return; }
+        try { S.data.money = await call('addLines', { orderId: o.id, memberIds: ids }); close(); done(); } catch (e) { toast(e.message, 'bad'); }
+      };
+    },
+  });
+}
+
+function addItemsToOrder(o, done) {
+  openModal('<h2>Add items</h2><p class="sub">For ' + esc(orderTitle(o)) + '.</p><div id="iRows">' + itemRowHtml() + '</div>' + itemDatalist() +
+    '<button type="button" class="btn sm" id="moreRow" style="margin-top:8px">' + icon('plus', 'sm') + 'Another item</button><p class="err" id="aiErr"></p>' +
+    '<div class="modal-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" data-ok>Add</button></div>', {
+    wide: true,
+    onMount: (m, close) => {
+      wireItemRows($('#iRows', m));
+      $('#moreRow', m).onclick = () => { $('#iRows', m).insertAdjacentHTML('beforeend', itemRowHtml()); };
+      $('[data-ok]', m).onclick = async () => {
+        try { S.data.money = await call('addLines', { orderId: o.id, items: readItemRows(m) }); close(); done(); } catch (e) { $('#aiErr', m).textContent = e.message; }
+      };
+    },
+  });
+}
+
+/** Edit one line: size, quantity, price (and item name in a single order), or remove it. */
+function editLine(l, done) {
+  if (!l) return;
+  const o = money().orders.find(x => x.id === l.orderId) || {};
+  const m = memberOf(l.memberId);
+  const when = (label, ts) => (ts ? '<span class="pill">' + label + ' ' + esc(ago(ts)) + '</span>' : '');
+  openModal('<h2>' + esc(m.name) + '</h2><p class="sub">' + esc(o.kind === 'troupe' ? o.title : 'Single order') + '</p>' +
+    '<div class="sum-pills" style="margin-top:10px">' + when('Given', l.given && l.givenAt) + when('Paid', l.paid && l.paidAt) + '</div>' +
+    '<form id="lForm" style="margin-top:6px">' + itemRowHtml(l).replace('<button type="button" class="icon-btn" data-rmrow aria-label="Remove">' + icon('x', 'sm') + '</button>', '<span></span>') + itemDatalist() +
+    '<p class="err" id="lErr"></p><div class="modal-actions"><button type="button" class="btn danger" id="lDel">' + (o.kind === 'troupe' ? 'Remove from order' : 'Delete item') + '</button><span class="spacer"></span>' +
+    '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button></div></form>', {
+    wide: true,
+    onMount: (md, close) => {
+      if (o.kind === 'troupe') $('[name=item]', md).readOnly = true;
+      $('#lForm', md).onsubmit = async (e) => {
+        e.preventDefault();
+        const it = readItemRows(md)[0] || {};
+        try {
+          const res = await call('updateLine', { id: l.id, item: it.item, variant: it.variant, qty: it.qty, price: it.price });
+          Object.assign(l, res.line);
+          close();
+          done();
+        } catch (err) { $('#lErr', md).textContent = err.message; }
+      };
+      $('#lDel', md).onclick = async () => {
+        close();
+        const paidNote = l.paid ? ' He already paid ' + fmtMoney(lineTotal(l)) + '.' : '';
+        if (!await confirmBox((o.kind === 'troupe' ? 'Remove ' + m.name + '?' : 'Delete ' + lineLabel(l) + '?'), 'This line is deleted.' + esc(paidNote), 'Delete', true)) return;
+        try { S.data.money = await call('deleteLines', { ids: [l.id] }); done(); } catch (err) { toast(err.message, 'bad'); }
+      };
+    },
+  });
+}
+
+/** Everything one scout owes / is waiting for, across all orders. */
+function openScoutMoney(memberId) {
+  const m = memberOf(memberId);
+  const draw = (md) => {
+    const ls = money().lines.filter(l => l.memberId === memberId);
+    const s = moneySums(ls);
+    const ordersById = new Map(money().orders.map(o => [o.id, o]));
+    $('#smBody', md).innerHTML =
+      '<div class="sum-pills">' + (s.owed ? '<span class="pill bad">Owes ' + esc(fmtMoney(s.owed)) + '</span>' : '') +
+        (s.toGiveN ? '<span class="pill warn">To give ' + s.toGiveN + '</span>' : '') + '<span class="pill good">Paid ' + esc(fmtMoney(s.paid)) + '</span>' +
+        (!s.owed && !s.toGiveN && ls.length ? '<span class="pill good">' + icon('check', 'sm') + 'Settled</span>' : '') + '</div>' +
+      '<div class="card" style="margin-top:12px" id="smLines">' + (ls.length ? ls.map(l => {
+        const o = ordersById.get(l.orderId) || {};
+        return lineRowHtml(l, lineLabel(l), (o.kind === 'troupe' ? 'Troupe order · ' : 'Single order · ') + (l.qty > 1 ? l.qty + ' × ' : '') + fmtMoney(lineTotal(l) / (l.qty || 1)));
+      }).join('') : '<p class="empty">Nothing yet.</p>') + '</div>';
+  };
+  openModal('<div class="row" style="flex-wrap:nowrap;--pc:' + patrolColor(m.patrol) + '"><span class="avatar">' + esc(initials(m.name)) + '</span><div><h2>' + esc(m.name) + '</h2><p class="muted small">' + esc(m.patrol) + '</p></div></div>' +
+    '<div id="smBody" style="margin-top:12px"></div>' +
+    '<div class="modal-actions"><button class="btn" id="smNew">' + icon('plus', 'sm') + 'Single order for him</button><span class="spacer"></span><button class="btn primary" data-close>Close</button></div>', {
+    wide: true,
+    onClose: () => { if (S.tab === 'money') go('money', true); },
+    onMount: (md, close) => {
+      draw(md);
+      wireLines($('#smBody', md), () => draw(md));
+      $('#smNew', md).onclick = () => { close(); editOrder({ kind: 'single' }, memberId); };
+    },
+  });
+}
+
 // =================================================================== OVERVIEW (grid like the Excel register)
 function overviewColumns() {
   const held = computeStats().held;
@@ -1949,6 +2371,7 @@ function renderAdmin(v) {
     // settings
     '<section class="card"><div class="card-head"><h2>Rules &amp; season</h2></div><div class="card-body"><form id="setForm">' +
       '<label class="field">Troupe name<input class="input" name="teamName" maxlength="60" value="' + esc(set.teamName) + '"></label>' +
+      '<label class="field">Currency (Money tab)<input class="input" name="currency" maxlength="6" value="' + esc(set.currency || '$') + '" placeholder="$"></label>' +
       '<label class="field">Season starts on<input class="input" type="date" name="seasonStart" value="' + esc(set.seasonStart) + '"></label>' +
       '<label class="field">Red alert after missing … réunions in a row<input class="input" type="number" inputmode="numeric" min="1" max="20" name="streakAlert" value="' + set.streakAlert + '"></label>' +
       '<label class="field">Start tracking percentages after … réunions<input class="input" type="number" inputmode="numeric" min="1" max="52" name="minMeetings" value="' + set.minMeetings + '"></label>' +
@@ -2029,7 +2452,7 @@ function renderAdmin(v) {
     e.preventDefault();
     const f = e.target;
     const payload = {};
-    ['teamName', 'seasonStart', 'streakAlert', 'minMeetings', 'warnPct', 'lowPct'].forEach(k => { payload[k] = f.elements[k].value; });
+    ['teamName', 'currency', 'seasonStart', 'streakAlert', 'minMeetings', 'warnPct', 'lowPct'].forEach(k => { payload[k] = f.elements[k].value; });
     try {
       const res = await call('saveSettings', payload);
       S.data.settings = res.settings;
