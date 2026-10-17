@@ -69,7 +69,7 @@
     call('setLines', { ids: pret.filter((l, i) => i % 3 !== 0).map(l => l.id), given: true }, token);
     call('setLines', { ids: pret.filter((l, i) => i % 4 !== 1).map(l => l.id), paid: true }, token);
     mon = call('saveOrder', { kind: 'single', memberId: members[4].id, items: [
-      { item: 'Chemise', variant: 'S', price: 25 }, { item: 'Ceinture', variant: '110', price: 8 }] }, token);
+      { item: 'Chemise', variant: 'S', price: 15 }, { item: 'Ceinture', variant: '110', price: 15 }] }, token);
     const single = mon.lines.filter(l => l.orderId === mon.id);
     call('setLines', { ids: single.map(l => l.id), paid: true }, token);
     call('updateLine', { id: single[1].id, given: true }, token);

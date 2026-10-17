@@ -20,6 +20,8 @@ const DB_SCHEMA = {
   // Money (chief only): orders (troupe-wide or for one scout) and one line per scout / item.
   orders: ['id', 'kind', 'title', 'price', 'note', 'createdAt', 'createdBy'],
   orderLines: ['id', 'orderId', 'memberId', 'item', 'variant', 'qty', 'price', 'given', 'givenAt', 'paid', 'paidAt', 'updatedAt', 'updatedBy'],
+  // Items the chief sells, with their sizes and usual price. scope: single | troupe | both.
+  catalog: ['id', 'name', 'sizes', 'price', 'scope', 'order'],
   attendance: ['date', 'memberId', 'wedStatus', 'wedReason', 'wedBy', 'wedAt', 'satStatus', 'satReason', 'satBy', 'satAt'],
 };
 
@@ -92,6 +94,8 @@ const ACTIONS = {
   setLines: setLines_,
   deleteLines: deleteLines_,
   deleteOrder: deleteOrder_,
+  saveCatalogItem: saveCatalogItem_,
+  deleteCatalogItem: deleteCatalogItem_,
 };
 
 // ---------------------------------------------------------------- actions
@@ -296,6 +300,7 @@ function saveAttendance_(p, token) {
 function money_() {
   const num = (v) => Number(v) || 0;
   return {
+    catalog: catalog_(),
     orders: readTable_('orders').map(o => ({ id: o.id, kind: o.kind, title: o.title, price: num(o.price), note: o.note, createdAt: o.createdAt })),
     lines: readTable_('orderLines').map(l => ({
       id: l.id, orderId: l.orderId, memberId: l.memberId, item: l.item, variant: l.variant, qty: num(l.qty) || 1, price: num(l.price),
@@ -304,7 +309,74 @@ function money_() {
   };
 }
 
+const DEFAULT_CATALOG = [
+  { name: 'Chemise', sizes: '14,16,S,M,L,XL,XXL', price: '15', scope: 'single' },
+  { name: 'Ceinture', sizes: '110,125,140', price: '15', scope: 'single' },
+  { name: 'Short', sizes: '16,S,M,L,XL,XXL', price: '15', scope: 'single' },
+  { name: 'Prêt', sizes: '', price: '', scope: 'both' },
+  { name: 'Cotisation de l\'année', sizes: '', price: '', scope: 'troupe' },
+];
+
+/** The item list (created once with the troupe's usual items; the chief can change it). */
+function catalog_() {
+  let rows = readTable_('catalog').map(stripRow_);
+  if (getConfig_().catalogSeeded !== '1') {
+    withLock_(() => {
+      rows = readTable_('catalog').map(stripRow_);
+      if (!rows.length) rows = DEFAULT_CATALOG.map((c, i) => Object.assign({ id: newId_('c'), order: String(i) }, c));
+      writeTable_('catalog', rows);
+      setConfig_({ catalogSeeded: '1' });
+    });
+  }
+  return rows
+    .map(r => ({ id: r.id, name: r.name, sizes: r.sizes ? r.sizes.split(',').map(x => x.trim()).filter(Boolean) : [], price: r.price === '' ? null : Number(r.price), scope: r.scope || 'both', order: Number(r.order) || 0 }))
+    .sort((a, b) => a.order - b.order);
+}
+
+/** A known item must be ordered the right way (troupe / single) and, in a single order, with one of its sizes. */
+function checkCatalog_(kind, it) {
+  const c = catalog_().find(x => memberId_(x.name) === memberId_(it.item));
+  if (!c) return;
+  if (kind === 'single' && c.scope === 'troupe') throw new Error(c.name + ' is only for the whole troupe.');
+  if (kind === 'troupe' && c.scope === 'single') throw new Error(c.name + ' is ordered scout by scout (single order).');
+  if (c.sizes.length && (it.variant || kind === 'single') && c.sizes.indexOf(it.variant) < 0) {
+    throw new Error('Choose a size for ' + c.name + ' (' + c.sizes.join(', ') + ').');
+  }
+}
+
+/** payload: { id?, name, sizes: [..] or "a, b", price ('' = set on each order), scope }. */
+function saveCatalogItem_(p, token) {
+  requireAdmin_(token);
+  const name = String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  if (!name) throw new Error('Give the item a name.');
+  const sizes = (Array.isArray(p.sizes) ? p.sizes : String(p.sizes || '').split(','))
+    .map(x => String(x).trim().slice(0, 15)).filter(Boolean);
+  const price = String(p.price == null ? '' : p.price).trim() === '' ? '' : String(cleanMoney_(p.price));
+  const scope = ['single', 'troupe', 'both'].indexOf(p.scope) >= 0 ? p.scope : 'both';
+  return withLock_(() => {
+    catalog_();
+    const rows = readTable_('catalog').map(stripRow_);
+    if (rows.some(r => r.id !== p.id && memberId_(r.name) === memberId_(name))) throw new Error(name + ' is already in the list.');
+    let r = p.id ? rows.find(x => x.id === p.id) : null;
+    if (p.id && !r) throw new Error('Item not found.');
+    if (!r) { r = { id: newId_('c'), order: String(rows.length) }; rows.push(r); }
+    Object.assign(r, { name: name, sizes: sizes.join(','), price: price, scope: scope });
+    writeTable_('catalog', rows);
+    return money_();
+  });
+}
+
+function deleteCatalogItem_(p, token) {
+  requireAdmin_(token);
+  return withLock_(() => {
+    catalog_();
+    writeTable_('catalog', readTable_('catalog').map(stripRow_).filter(r => r.id !== p.id));
+    return money_();
+  });
+}
+
 function cleanMoney_(v) {
+  if (String(v == null ? '' : v).trim() === '') throw new Error('Enter a price.');
   const n = Math.round(Number(String(v == null ? '' : v).replace(',', '.')) * 100) / 100;
   if (!(n >= 0) || n > 1e9) throw new Error('Bad price.');
   return n;
@@ -353,11 +425,13 @@ function saveOrder_(p, token) {
         const price = cleanMoney_(p.price);
         const ids = activeMemberIds_(p.memberIds);
         if (!ids.length) throw new Error('Choose at least one scout.');
+        checkCatalog_('troupe', { item: title, variant: '' });
         ids.forEach(id => lines.push(newLine_(o.id, id, { item: title, variant: '', qty: 1, price: price }, me)));
       } else {
         if (!activeMemberIds_([p.memberId]).length) throw new Error('Choose the scout.');
         const items = (Array.isArray(p.items) ? p.items : []).map(cleanItem_);
         if (!items.length) throw new Error('Add at least one item.');
+        items.forEach(it => checkCatalog_('single', it));
         items.forEach(it => lines.push(newLine_(o.id, p.memberId, it, me)));
       }
     } else if (o.kind === 'troupe') {
@@ -393,7 +467,10 @@ function addLines_(p, token) {
       const first = lines.find(l => l.orderId === o.id);
       const memberId = first ? first.memberId : p.memberId;
       if (!memberId) throw new Error('Choose the scout.');
-      (Array.isArray(p.items) ? p.items : []).map(cleanItem_).forEach(it => lines.push(newLine_(o.id, memberId, it, me)));
+      (Array.isArray(p.items) ? p.items : []).map(cleanItem_).forEach(it => {
+        checkCatalog_('single', it);
+        lines.push(newLine_(o.id, memberId, it, me));
+      });
     }
     writeTable_('orderLines', lines);
     return money_();
@@ -418,6 +495,8 @@ function updateLine_(p, token) {
         item: p.item !== undefined ? p.item : l.item, variant: p.variant !== undefined ? p.variant : l.variant,
         qty: p.qty !== undefined ? p.qty : l.qty, price: p.price !== undefined ? p.price : l.price,
       });
+      const o = readTable_('orders').find(x => x.id === l.orderId);
+      checkCatalog_(o && o.kind === 'troupe' ? 'troupe' : 'single', it);
       Object.assign(changes, { item: it.item, variant: it.variant, qty: String(it.qty), price: String(it.price) });
     }
     updateRow_('orderLines', l._row, changes);

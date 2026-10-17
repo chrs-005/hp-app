@@ -299,7 +299,7 @@ assert.match(s6.api({ action: 'testPush', payload: {}, token: bisonTok }).error,
 
 // ---- Money (chief only): troupe orders, single orders, given / paid.
 const st7 = c3('state', {}, setup3.token);
-assert.deepStrictEqual(st7.money, { orders: [], lines: [] });
+assert.deepStrictEqual([st7.money.orders, st7.money.lines], [[], []]);
 const everyone = st7.members.filter(m => m.active).map(m => m.id);
 let mon = c3('saveOrder', { kind: 'troupe', title: 'Prêt', price: '12.5', memberIds: everyone }, setup3.token);
 const pret = mon.id;
@@ -345,6 +345,40 @@ c3('saveReporter', { name: 'Simple Cp', pin: '2222', role: 'cp', patrols: ['Pand
 const simpleTok = c3('login', { name: 'Simple Cp', pin: '2222' }).token;
 assert.strictEqual(c3('state', {}, simpleTok).money, null);
 assert.match(s3.api({ action: 'updateLine', payload: { id: sl[0].id, given: true }, token: simpleTok }).error, /Only the chief/);
+// Item catalog: the troupe's items, sizes, prices and how they can be ordered.
+const cat = c3('state', {}, setup3.token).money.catalog;
+assert.deepStrictEqual(cat.map(c => c.name), ['Chemise', 'Ceinture', 'Short', 'Prêt', 'Cotisation de l\'année']);
+assert.deepStrictEqual(cat[0].sizes, ['14', '16', 'S', 'M', 'L', 'XL', 'XXL']);
+assert.deepStrictEqual(cat[1].sizes, ['110', '125', '140']);
+assert.deepStrictEqual(cat[2].sizes, ['16', 'S', 'M', 'L', 'XL', 'XXL']);
+assert.ok(cat.slice(0, 3).every(c => c.price === 15 && c.scope === 'single'));
+assert.strictEqual(cat[3].scope, 'both');
+assert.strictEqual(cat[3].price, null);
+assert.strictEqual(cat[4].scope, 'troupe');
+const err = (a, p) => s3.api({ action: a, payload: p, token: setup3.token }).error;
+assert.match(err('saveOrder', { kind: 'single', memberId: everyone[5], items: [{ item: 'Chemise', variant: '', price: 15 }] }), /Choose a size for Chemise/);
+assert.match(err('saveOrder', { kind: 'single', memberId: everyone[5], items: [{ item: 'Ceinture', variant: 'M', price: 15 }] }), /size for Ceinture/);
+assert.match(err('saveOrder', { kind: 'single', memberId: everyone[5], items: [{ item: 'Cotisation de l\'année', price: 50 }] }), /only for the whole troupe/);
+assert.match(err('saveOrder', { kind: 'troupe', title: 'Chemise', price: 15, memberIds: everyone }), /scout by scout/);
+assert.match(err('saveOrder', { kind: 'troupe', title: 'Cotisation de l\'année', price: '', memberIds: everyone }), /Enter a price/);
+c3('saveOrder', { kind: 'troupe', title: 'Cotisation de l\'année', price: 50, memberIds: everyone }, setup3.token);
+mon = c3('saveOrder', { kind: 'single', memberId: everyone[5], items: [{ item: 'Prêt', price: 12 }, { item: 'Short', variant: 'XL', price: 15 }] }, setup3.token);
+const shortLine = mon.lines.find(l => l.orderId === mon.id && l.item === 'Short');
+assert.match(err('updateLine', { id: shortLine.id, variant: '125' }), /size for Short/);
+c3('updateLine', { id: shortLine.id, variant: 'L' }, setup3.token);
+// New items later.
+mon = c3('saveCatalogItem', { name: 'Foulard', sizes: '', price: '8', scope: 'both' }, setup3.token);
+assert.ok(mon.catalog.some(c => c.name === 'Foulard' && c.price === 8 && !c.sizes.length));
+mon = c3('saveCatalogItem', { name: 'Pull', sizes: 'S, M, L', price: '20', scope: 'single' }, setup3.token);
+assert.deepStrictEqual(mon.catalog.find(c => c.name === 'Pull').sizes, ['S', 'M', 'L']);
+assert.match(err('saveCatalogItem', { name: 'pull', sizes: '', price: '', scope: 'single' }), /already in the list/);
+const pull = mon.catalog.find(c => c.name === 'Pull');
+mon = c3('saveCatalogItem', { id: pull.id, name: 'Pull', sizes: 'S,M,L,XL', price: '22', scope: 'single' }, setup3.token);
+assert.strictEqual(mon.catalog.find(c => c.name === 'Pull').price, 22);
+mon = c3('deleteCatalogItem', { id: pull.id }, setup3.token);
+assert.ok(!mon.catalog.some(c => c.name === 'Pull'));
+assert.strictEqual(c3('state', {}, setup3.token).money.catalog.length, 6);   // deleted items do not come back
+
 // Delete the single order with its lines.
 mon = c3('deleteOrder', { id: single }, setup3.token);
 assert.strictEqual(mon.lines.filter(l => l.orderId === single).length, 0);

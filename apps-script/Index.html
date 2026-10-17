@@ -432,6 +432,16 @@ label.field + label.field { margin-top: 12px; }
 .irow { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, .9fr) 58px minmax(0, .9fr) 40px; gap: 6px; align-items: end; margin-top: 8px; }
 .irow .input { margin-top: 4px; min-height: 42px; padding: 8px 10px; }
 .irow label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+@media (max-width: 560px) {
+  /* phone: item on its own line, then size · qty · price */
+  .irow { grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1fr) 40px; }
+  .irow > :nth-child(1) { grid-column: 1 / 4; grid-row: 1; }
+  .irow > :nth-child(5) { grid-column: 4; grid-row: 1; }
+  .irow > :nth-child(2) { grid-column: 1; grid-row: 2; }
+  .irow > :nth-child(3) { grid-column: 2; grid-row: 2; }
+  .irow > :nth-child(4) { grid-column: 3 / 5; grid-row: 2; }
+  .irow + .irow { border-top: 1px solid var(--hair); padding-top: 10px; margin-top: 10px; }
+}
 .pick-list { max-height: 50vh; overflow: auto; margin-top: 10px; border: 1px solid var(--border); border-radius: 12px; }
 .pick-list label { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--hair); font-weight: 600; font-size: 14px; }
 .pick-list label:first-child { border-top: 0; }
@@ -653,7 +663,7 @@ const S = {
 function indexData() {
   const D = S.data;
   D.events = D.events || [];   // older server version without camps / events
-  D.money = D.money || { orders: [], lines: [] };
+  D.money = D.money || { catalog: [], orders: [], lines: [] };
   S.att = new Map();
   D.attendance.forEach(a => S.att.set(a.date + '|' + a.memberId, a));
   S.patrolIdx = new Map(D.patrols.map((p, i) => [p, i]));
@@ -1616,7 +1626,8 @@ function renderMoney(v) {
         '<button role="tab" data-mview="scouts" aria-selected="' + (M.view === 'scouts') + '">By scout</button>' +
       '</div>' +
       '<div class="row"><button class="btn sm primary" id="newTroupe">' + icon('plus', 'sm') + 'Troupe order</button>' +
-        '<button class="btn sm" id="newSingle">' + icon('plus', 'sm') + 'Single order</button></div>' +
+        '<button class="btn sm" id="newSingle">' + icon('plus', 'sm') + 'Single order</button>' +
+        '<button class="btn sm" id="catalogBtn">Items &amp; prices</button></div>' +
     '</div>';
 
   if (M.view === 'orders') {
@@ -1657,6 +1668,7 @@ function renderMoney(v) {
   $$('[data-mscout]', v).forEach(b => { b.onclick = () => openScoutMoney(b.dataset.mscout); });
   $('#newTroupe', v).onclick = () => editOrder({ kind: 'troupe' });
   $('#newSingle', v).onclick = () => editOrder({ kind: 'single' });
+  $('#catalogBtn', v).onclick = openCatalog;
 }
 
 function lineRowHtml(l, label, sub) {
@@ -1766,29 +1778,94 @@ function renderOrder(v, M) {
   wireLines($('#oLines', v), again);
 }
 
+const catalog = () => money().catalog || [];
+const findCat = (name) => catalog().find(c => nameKey(c.name) === nameKey(name));
+/** Items that can be ordered that way: kind 'single' (one scout) or 'troupe' (whole troupe). */
+const catalogFor = (kind) => catalog().filter(c => c.scope === 'both' || c.scope === kind);
+const OTHER = '__other';
+const sizeOptions = (sizes, selected) => '<option value="">Size…</option>' + sizes.map(z => '<option' + (z === selected ? ' selected' : '') + '>' + esc(z) + '</option>').join('');
+
 function itemDatalist() {
   return '<datalist id="itemNames">' + itemNames().map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>';
 }
-function itemRowHtml(it) {
+
+/**
+ * One item row: item chosen from the list (or "Other…" typed by hand), its size from the
+ * item's sizes, quantity and price (filled from the list). lock = the item cannot change.
+ */
+function itemRowHtml(it, kind, lock) {
   it = it || {};
+  const list = catalogFor(kind || 'single');
+  const known = it.item ? findCat(it.item) : null;
+  const sel = it.item ? (known ? known.name : OTHER) : '';
+  const options = lock
+    ? '<option>' + esc(it.item) + '</option>'
+    : '<option value="">Choose…</option>' + list.map(c => '<option value="' + esc(c.name) + '"' + (c.name === sel ? ' selected' : '') + '>' + esc(c.name) + '</option>').join('') +
+      (known && list.indexOf(known) < 0 ? '<option selected>' + esc(known.name) + '</option>' : '') +
+      '<option value="' + OTHER + '"' + (sel === OTHER ? ' selected' : '') + '>Other…</option>';
   return '<div class="irow">' +
-    '<label>Item<input class="input" name="item" list="itemNames" maxlength="60" placeholder="Chemise" value="' + esc(it.item || '') + '"></label>' +
-    '<label>Size<input class="input" name="variant" maxlength="30" placeholder="S / 110" value="' + esc(it.variant || '') + '"></label>' +
+    '<label>Item<select class="input" name="itemSel"' + (lock ? ' disabled' : '') + '>' + options + '</select>' +
+      '<input class="input' + (sel === OTHER ? '' : ' hidden') + '" name="item" list="itemNames" maxlength="60" placeholder="Item name" value="' + esc(sel === OTHER ? it.item : '') + '"></label>' +
+    '<label>Size<select class="input" name="sizeSel"></select>' +
+      '<input class="input hidden" name="variant" maxlength="30" placeholder="Size" value="' + esc(it.variant || '') + '"></label>' +
     '<label>Qty<input class="input" name="qty" type="number" inputmode="numeric" min="1" value="' + esc(it.qty || 1) + '"></label>' +
     '<label>Price<input class="input" name="price" type="number" inputmode="decimal" min="0" step="0.01" value="' + esc(it.price != null ? it.price : '') + '"></label>' +
-    '<button type="button" class="icon-btn" data-rmrow aria-label="Remove">' + icon('x', 'sm') + '</button></div>';
+    (lock ? '<span></span>' : '<button type="button" class="icon-btn" data-rmrow aria-label="Remove">' + icon('x', 'sm') + '</button>') + '</div>';
 }
+
+/** Shows the right size control for the chosen item; fillPrice puts the list price in. */
+function syncItemRow(row, fillPrice) {
+  const sel = $('[name=itemSel]', row).value;
+  const c = sel && sel !== OTHER ? findCat(sel) : null;
+  const sizeSel = $('[name=sizeSel]', row);
+  const sizeIn = $('[name=variant]', row);
+  $('[name=item]', row).classList.toggle('hidden', sel !== OTHER);
+  if (sel === OTHER) {
+    sizeSel.classList.add('hidden');
+    sizeIn.classList.remove('hidden');
+  } else {
+    sizeIn.classList.add('hidden');
+    sizeSel.classList.remove('hidden');
+    const sizes = c ? c.sizes : [];
+    const current = sizeIn.value;
+    sizeSel.innerHTML = sizes.length ? sizeOptions(sizes.concat(current && sizes.indexOf(current) < 0 ? [current] : []), current) : '<option value="">—</option>';
+    sizeSel.disabled = !sizes.length;
+  }
+  if (fillPrice && c && c.price != null) $('[name=price]', row).value = c.price;
+}
+
 function readItemRows(root) {
-  return $$('.irow', root).map(r => ({
-    item: $('[name=item]', r).value, variant: $('[name=variant]', r).value, qty: $('[name=qty]', r).value, price: $('[name=price]', r).value,
-  })).filter(it => it.item.trim() || it.price !== '');
+  return $$('.irow', root).map(r => {
+    const sel = $('[name=itemSel]', r).value;
+    const other = sel === OTHER;
+    const c = sel && !other ? findCat(sel) : null;
+    return {
+      item: other ? $('[name=item]', r).value : sel,
+      variant: other ? $('[name=variant]', r).value : (c && c.sizes.length ? $('[name=sizeSel]', r).value : ''),
+      qty: $('[name=qty]', r).value,
+      price: $('[name=price]', r).value,
+    };
+  }).filter(it => String(it.item).trim() || it.price !== '');
 }
+
 function wireItemRows(root) {
+  $$('.irow', root).forEach(r => syncItemRow(r, false));
   root.addEventListener('click', (e) => {
     const rm = e.target.closest('[data-rmrow]');
     if (rm && $$('.irow', root).length > 1) rm.closest('.irow').remove();
   });
+  root.addEventListener('change', (e) => {
+    const row = e.target.closest('.irow');
+    if (!row) return;
+    if (e.target.name === 'itemSel') syncItemRow(row, true);
+    if (e.target.name === 'sizeSel') $('[name=variant]', row).value = e.target.value;
+  });
 }
+function addItemRow(root, kind) {
+  root.insertAdjacentHTML('beforeend', itemRowHtml(null, kind));
+  syncItemRow(root.lastElementChild, false);
+}
+
 function memberSelectHtml(selected) {
   return '<select class="input" name="memberId" required><option value="">Choose a scout…</option>' + S.data.patrols.map(p =>
     '<optgroup label="' + esc(p) + '">' + activeMembers([p]).map(m => '<option value="' + esc(m.id) + '"' + (m.id === selected ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('') + '</optgroup>').join('') + '</select>';
@@ -1800,19 +1877,25 @@ function editOrder(o, presetMember) {
   const troupe = o.kind === 'troupe';
   let body;
   if (troupe) {
-    body = '<label class="field">Item<input class="input" name="title" list="itemNames" maxlength="60" required placeholder="e.g. Prêt, Foulard, Badge" value="' + esc(o.title || '') + '"></label>' +
+    const list = catalogFor('troupe');
+    const known = o.title ? findCat(o.title) : null;
+    const sel = o.title ? (known ? known.name : OTHER) : '';
+    body = '<label class="field">Item<select class="input" name="titleSel" required><option value="">Choose…</option>' +
+        list.map(c => '<option value="' + esc(c.name) + '"' + (c.name === sel ? ' selected' : '') + '>' + esc(c.name) + '</option>').join('') +
+        '<option value="' + OTHER + '"' + (sel === OTHER ? ' selected' : '') + '>Other…</option></select>' +
+        '<input class="input' + (sel === OTHER ? '' : ' hidden') + '" name="title" list="itemNames" maxlength="60" placeholder="Item name" value="' + esc(sel === OTHER ? o.title : '') + '"></label>' +
       '<label class="field">Price for each scout<input class="input" name="price" type="number" inputmode="decimal" min="0" step="0.01" required value="' + esc(o.price != null ? o.price : '') + '"></label>' +
       (isNew ? '<div class="field" style="margin-top:12px;font-size:13px;font-weight:600;color:var(--text-2)">For which patrols? (you can add or remove scouts later)</div>' +
         '<div class="check-grid">' + S.data.patrols.map(p => '<label class="check"><input type="checkbox" name="patrols" value="' + esc(p) + '" checked><span class="pdot" style="--pc:' + patrolColor(p) + '"></span>' + esc(p) + '</label>').join('') + '</div>'
         : '<p class="muted small" style="margin-top:6px">Changing the price updates every scout who still had the old price.</p>');
   } else {
     body = (isNew ? '<label class="field">Scout' + memberSelectHtml(presetMember) + '</label>' +
-      '<div class="field" style="margin-top:12px;font-size:13px;font-weight:600;color:var(--text-2)">Items</div><div id="iRows">' + itemRowHtml() + '</div>' +
+      '<div class="field" style="margin-top:12px;font-size:13px;font-weight:600;color:var(--text-2)">Items</div><div id="iRows">' + itemRowHtml(null, 'single') + '</div>' +
       '<button type="button" class="btn sm" id="moreRow" style="margin-top:8px">' + icon('plus', 'sm') + 'Another item</button>' : '');
   }
   body += '<label class="field" style="margin-top:12px">Note (optional)<input class="input" name="note" maxlength="300" value="' + esc(o.note || '') + '"></label>';
   openModal('<h2>' + (isNew ? (troupe ? 'New troupe order' : 'New single order') : 'Edit order') + '</h2>' +
-    '<p class="sub">' + (troupe ? 'The same item for many scouts, e.g. 50 Prêt.' : 'Items ordered by one scout, each with its size and price.') + '</p>' +
+    '<p class="sub">' + (troupe ? 'The same item for many scouts, e.g. Prêt or the Cotisation de l\'année.' : 'Items ordered by one scout, each with its size and price.') + '</p>' +
     '<form id="oForm" style="margin-top:14px">' + body + itemDatalist() + '<p class="err" id="oErr"></p>' +
     '<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">' + (isNew ? 'Create' : 'Save') + '</button></div></form>', {
     wide: !troupe,
@@ -1820,13 +1903,22 @@ function editOrder(o, presetMember) {
       const f = $('#oForm', m);
       if ($('#iRows', m)) {
         wireItemRows($('#iRows', m));
-        $('#moreRow', m).onclick = () => { $('#iRows', m).insertAdjacentHTML('beforeend', itemRowHtml()); };
+        $('#moreRow', m).onclick = () => addItemRow($('#iRows', m), 'single');
+      }
+      if (troupe) {
+        f.elements.titleSel.onchange = () => {
+          const v = f.elements.titleSel.value;
+          f.elements.title.classList.toggle('hidden', v !== OTHER);
+          const c = v && v !== OTHER ? findCat(v) : null;
+          if (c && c.price != null) f.elements.price.value = c.price;
+          if (v === OTHER) f.elements.title.focus();
+        };
       }
       f.onsubmit = async (e) => {
         e.preventDefault();
         const payload = { id: o.id, kind: o.kind, note: f.elements.note.value };
         if (troupe) {
-          payload.title = f.elements.title.value;
+          payload.title = f.elements.titleSel.value === OTHER ? f.elements.title.value : f.elements.titleSel.value;
           payload.price = f.elements.price.value;
           if (isNew) {
             const pats = $$('input[name=patrols]:checked', f).map(x => x.value);
@@ -1838,7 +1930,7 @@ function editOrder(o, presetMember) {
         }
         try {
           const res = await call('saveOrder', payload);
-          S.data.money = { orders: res.orders, lines: res.lines };
+          S.data.money = res;
           close();
           toast(isNew ? 'Order created' : 'Saved');
           S.moneyView = Object.assign(S.moneyView || {}, { orderId: res.id, filter: 'all', patrol: 'all' });
@@ -1870,13 +1962,13 @@ function addScoutsToOrder(o, done) {
 }
 
 function addItemsToOrder(o, done) {
-  openModal('<h2>Add items</h2><p class="sub">For ' + esc(orderTitle(o)) + '.</p><div id="iRows">' + itemRowHtml() + '</div>' + itemDatalist() +
+  openModal('<h2>Add items</h2><p class="sub">For ' + esc(orderTitle(o)) + '.</p><div id="iRows">' + itemRowHtml(null, 'single') + '</div>' + itemDatalist() +
     '<button type="button" class="btn sm" id="moreRow" style="margin-top:8px">' + icon('plus', 'sm') + 'Another item</button><p class="err" id="aiErr"></p>' +
     '<div class="modal-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" data-ok>Add</button></div>', {
     wide: true,
     onMount: (m, close) => {
       wireItemRows($('#iRows', m));
-      $('#moreRow', m).onclick = () => { $('#iRows', m).insertAdjacentHTML('beforeend', itemRowHtml()); };
+      $('#moreRow', m).onclick = () => addItemRow($('#iRows', m), 'single');
       $('[data-ok]', m).onclick = async () => {
         try { S.data.money = await call('addLines', { orderId: o.id, items: readItemRows(m) }); close(); done(); } catch (e) { $('#aiErr', m).textContent = e.message; }
       };
@@ -1884,25 +1976,26 @@ function addItemsToOrder(o, done) {
   });
 }
 
-/** Edit one line: size, quantity, price (and item name in a single order), or remove it. */
+/** Edit one line: size, quantity, price (and the item in a single order), or remove it. */
 function editLine(l, done) {
   if (!l) return;
   const o = money().orders.find(x => x.id === l.orderId) || {};
   const m = memberOf(l.memberId);
+  const troupe = o.kind === 'troupe';
   const when = (label, ts) => (ts ? '<span class="pill">' + label + ' ' + esc(ago(ts)) + '</span>' : '');
-  openModal('<h2>' + esc(m.name) + '</h2><p class="sub">' + esc(o.kind === 'troupe' ? o.title : 'Single order') + '</p>' +
+  openModal('<h2>' + esc(m.name) + '</h2><p class="sub">' + esc(troupe ? o.title : 'Single order') + '</p>' +
     '<div class="sum-pills" style="margin-top:10px">' + when('Given', l.given && l.givenAt) + when('Paid', l.paid && l.paidAt) + '</div>' +
-    '<form id="lForm" style="margin-top:6px">' + itemRowHtml(l).replace('<button type="button" class="icon-btn" data-rmrow aria-label="Remove">' + icon('x', 'sm') + '</button>', '<span></span>') + itemDatalist() +
-    '<p class="err" id="lErr"></p><div class="modal-actions"><button type="button" class="btn danger" id="lDel">' + (o.kind === 'troupe' ? 'Remove from order' : 'Delete item') + '</button><span class="spacer"></span>' +
+    '<form id="lForm" style="margin-top:6px"><div id="lRow">' + itemRowHtml(l, troupe ? 'troupe' : 'single', troupe) + '</div>' + itemDatalist() +
+    '<p class="err" id="lErr"></p><div class="modal-actions"><button type="button" class="btn danger" id="lDel">' + (troupe ? 'Remove from order' : 'Delete item') + '</button><span class="spacer"></span>' +
     '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button></div></form>', {
     wide: true,
     onMount: (md, close) => {
-      if (o.kind === 'troupe') $('[name=item]', md).readOnly = true;
+      wireItemRows($('#lRow', md));
       $('#lForm', md).onsubmit = async (e) => {
         e.preventDefault();
         const it = readItemRows(md)[0] || {};
         try {
-          const res = await call('updateLine', { id: l.id, item: it.item, variant: it.variant, qty: it.qty, price: it.price });
+          const res = await call('updateLine', { id: l.id, item: troupe ? l.item : it.item, variant: it.variant, qty: it.qty, price: it.price });
           Object.assign(l, res.line);
           close();
           done();
@@ -1911,8 +2004,65 @@ function editLine(l, done) {
       $('#lDel', md).onclick = async () => {
         close();
         const paidNote = l.paid ? ' He already paid ' + fmtMoney(lineTotal(l)) + '.' : '';
-        if (!await confirmBox((o.kind === 'troupe' ? 'Remove ' + m.name + '?' : 'Delete ' + lineLabel(l) + '?'), 'This line is deleted.' + esc(paidNote), 'Delete', true)) return;
+        if (!await confirmBox((troupe ? 'Remove ' + m.name + '?' : 'Delete ' + lineLabel(l) + '?'), 'This line is deleted.' + esc(paidNote), 'Delete', true)) return;
         try { S.data.money = await call('deleteLines', { ids: [l.id] }); done(); } catch (err) { toast(err.message, 'bad'); }
+      };
+    },
+  });
+}
+
+const SCOPES = { single: 'One scout', troupe: 'Whole troupe', both: 'One scout or whole troupe' };
+
+/** The item list: names, sizes, usual price and how each can be ordered. */
+function openCatalog() {
+  const draw = (md) => {
+    $('#catList', md).innerHTML = catalog().map(c =>
+      '<div class="rep"><div class="grow"><b>' + esc(c.name) + '</b><div class="tags">' +
+        '<span class="pill">' + (c.price != null ? esc(fmtMoney(c.price)) : 'Price set on each order') + '</span>' +
+        '<span class="pill">' + esc(SCOPES[c.scope]) + '</span>' +
+        (c.sizes.length ? '<span class="pill">Sizes: ' + esc(c.sizes.join(', ')) + '</span>' : '') +
+      '</div></div><button class="btn sm" data-cat="' + esc(c.id) + '">Edit</button></div>').join('') || '<p class="empty">No items.</p>';
+  };
+  openModal('<h2>Items &amp; prices</h2><p class="sub">The items you can choose in an order. "Other…" is always there for a one-off item.</p>' +
+    '<div id="catList" style="margin-top:8px"></div>' +
+    '<div class="modal-actions"><button class="btn" id="catNew">' + icon('plus', 'sm') + 'New item</button><span class="spacer"></span><button class="btn primary" data-close>Done</button></div>', {
+    wide: true,
+    onMount: (md, close) => {
+      draw(md);
+      const edit = (c) => { close(); editCatalogItem(c, openCatalog); };
+      $('#catList', md).addEventListener('click', (e) => {
+        const b = e.target.closest('[data-cat]');
+        if (b) edit(catalog().find(c => c.id === b.dataset.cat));
+      });
+      $('#catNew', md).onclick = () => edit(null);
+    },
+  });
+}
+
+function editCatalogItem(c, after) {
+  const isNew = !c;
+  c = c || { name: '', sizes: [], price: null, scope: 'single' };
+  openModal('<h2>' + (isNew ? 'New item' : 'Edit ' + esc(c.name)) + '</h2>' +
+    '<form id="cForm" style="margin-top:14px">' +
+      '<label class="field">Name<input class="input" name="name" maxlength="60" required value="' + esc(c.name) + '" placeholder="e.g. Foulard, Pull"></label>' +
+      '<label class="field">Sizes (separated by commas, empty if none)<input class="input" name="sizes" maxlength="200" value="' + esc(c.sizes.join(', ')) + '" placeholder="S, M, L"></label>' +
+      '<label class="field">Usual price (empty = set on each order)<input class="input" name="price" type="number" inputmode="decimal" min="0" step="0.01" value="' + esc(c.price != null ? c.price : '') + '"></label>' +
+      '<label class="field">Ordered for<select class="input" name="scope">' + Object.keys(SCOPES).map(k => '<option value="' + k + '"' + (c.scope === k ? ' selected' : '') + '>' + SCOPES[k] + '</option>').join('') + '</select></label>' +
+      '<p class="err" id="cErr"></p><div class="modal-actions">' + (!isNew ? '<button type="button" class="btn danger" id="cDel">Delete</button><span class="spacer"></span>' : '') +
+      '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button></div></form>', {
+    onClose: () => { if (after) setTimeout(after, 220); },
+    onMount: (md, close) => {
+      const f = $('#cForm', md);
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          S.data.money = await call('saveCatalogItem', { id: c.id, name: f.elements.name.value, sizes: f.elements.sizes.value, price: f.elements.price.value, scope: f.elements.scope.value });
+          toast('Saved');
+          close();
+        } catch (err) { $('#cErr', md).textContent = err.message; }
+      };
+      if ($('#cDel', md)) $('#cDel', md).onclick = async () => {
+        try { S.data.money = await call('deleteCatalogItem', { id: c.id }); toast('Deleted'); close(); } catch (err) { $('#cErr', md).textContent = err.message; }
       };
     },
   });

@@ -1,6 +1,6 @@
 // Service worker for the installed app. The page is network-first (always fresh when
 // online, cached copy when offline). Calls to Google (the data) are never cached.
-const CACHE = 'hp-app-9b19d15b49';
+const CACHE = 'hp-app-927c2c88e6';
 const SHELL = ['./', 'index.html', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
