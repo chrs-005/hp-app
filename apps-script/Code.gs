@@ -22,6 +22,11 @@ const DB_SCHEMA = {
   orderLines: ['id', 'orderId', 'memberId', 'item', 'variant', 'qty', 'price', 'given', 'givenAt', 'paid', 'paidAt', 'updatedAt', 'updatedBy'],
   // Items the chief sells, with their sizes and usual price. scope: single | troupe | both.
   catalog: ['id', 'name', 'sizes', 'price', 'scope', 'order'],
+  // Progression: groups (Promesse, Seconde classe… and Badges), their étapes / badges,
+  // and one row per scout and thing done. key = item id, or 'obtained:' + group id.
+  progGroups: ['id', 'name', 'kind', 'order'],
+  progItems: ['id', 'groupId', 'name', 'order'],
+  progDone: ['memberId', 'key', 'doneAt', 'doneBy'],
   attendance: ['date', 'memberId', 'wedStatus', 'wedReason', 'wedBy', 'wedAt', 'satStatus', 'satReason', 'satBy', 'satAt'],
 };
 
@@ -97,6 +102,9 @@ const ACTIONS = {
   deleteOrder: deleteOrder_,
   saveCatalogItem: saveCatalogItem_,
   deleteCatalogItem: deleteCatalogItem_,
+  progSet: progSet_,
+  saveProgGroup: saveProgGroup_,
+  deleteProgGroup: deleteProgGroup_,
 };
 
 // ---------------------------------------------------------------- actions
@@ -155,7 +163,16 @@ function login_(p) {
     throw new Error('Wrong name or PIN.');
   }
   cache.remove(failKey);
+  if (isSp_(r)) throw new Error('The app is for the CPs and the chiefs only.');
   return { token: makeToken_(r.id) };
+}
+
+/** SPs (red names) have no access. Older accounts without a role take it from the members file. */
+function isSp_(r) {
+  if (r.role === 'sp') return true;
+  if (r.role === 'admin' || r.role === 'cp') return false;
+  const m = readTable_('members').find(x => memberId_(x.name) === memberId_(r.name));
+  return !!(m && m.leader === 'red');
 }
 
 /** payload.sync = true forces a check of the members file in Drive (the ↻ button). */
@@ -202,6 +219,7 @@ function state_(p, token) {
     membersSync: membersSync,
     reminders: isAdmin ? remindersOn_() : null,
     money: isAdmin ? money_() : null,
+    prog: prog_(me),
     serverTime: nowIso_(),
   };
 }
@@ -585,6 +603,139 @@ function deleteOrder_(p, token) {
   });
 }
 
+// ---------------------------------------------------------------- progression (CPs and chiefs)
+// Groups: the stages (Promesse, Seconde classe, Première classe, Troupe Raider) with their
+// étapes, and Badges. A scout's progress = which étapes / badges are done, plus "obtained".
+
+const DEFAULT_PROG = [
+  { name: 'Promesse', kind: 'stage' },
+  { name: 'Seconde classe', kind: 'stage' },
+  { name: 'Première classe', kind: 'stage' },
+  { name: 'Troupe Raider', kind: 'stage' },
+  { name: 'Badges', kind: 'badges' },
+];
+
+function progGroups_() {
+  let rows = readTable_('progGroups').map(stripRow_);
+  if (getConfig_().progSeeded !== '1') {
+    withLock_(() => {
+      rows = readTable_('progGroups').map(stripRow_);
+      if (!rows.length) rows = DEFAULT_PROG.map((g, i) => ({ id: newId_('g'), name: g.name, kind: g.kind, order: String(i) }));
+      writeTable_('progGroups', rows);
+      setConfig_({ progSeeded: '1' });
+    });
+  }
+  return rows.map(g => ({ id: g.id, name: g.name, kind: g.kind === 'badges' ? 'badges' : 'stage', order: Number(g.order) || 0 }))
+    .sort((a, b) => a.order - b.order);
+}
+
+function prog_(me) {
+  const scope = scopeOf_(me);
+  let done = readTable_('progDone').map(stripRow_);
+  if (scope) {
+    const ids = {};
+    readTable_('members').forEach(m => { if (scope[m.patrol]) ids[m.id] = true; });
+    done = done.filter(d => ids[d.memberId]);
+  }
+  return {
+    groups: progGroups_(),
+    items: readTable_('progItems').map(i => ({ id: i.id, groupId: i.groupId, name: i.name, order: Number(i.order) || 0 }))
+      .sort((a, b) => a.order - b.order),
+    done: done,
+  };
+}
+
+/** Ticks, sent in batches: { changes: [{ memberId, key, done }] }. CPs only for their patrol. */
+function progSet_(p, token) {
+  const me = auth_(token);
+  const scope = scopeOf_(me);
+  const members = {};
+  readTable_('members').forEach(m => { members[m.id] = m; });
+  const keys = {};
+  progGroups_().forEach(g => { keys['obtained:' + g.id] = true; });
+  readTable_('progItems').forEach(i => { keys[i.id] = true; });
+  const changes = {};
+  (Array.isArray(p.changes) ? p.changes : []).slice(0, 2000).forEach(c => {
+    const m = members[c.memberId];
+    if (!m || !keys[c.key]) return;   // deleted scout / étape: ignore
+    if (scope && !scope[m.patrol]) throw new Error('You are not in charge of ' + m.name + '.');
+    changes[c.memberId + '|' + c.key] = c;
+  });
+  if (!Object.keys(changes).length) return { saved: 0 };
+  return withLock_(() => {
+    const now = nowIso_();
+    const rows = readTable_('progDone').map(stripRow_);
+    const byKey = {};
+    rows.forEach((r, i) => { byKey[r.memberId + '|' + r.key] = i; });
+    const remove = {};
+    Object.keys(changes).forEach(k => {
+      const c = changes[k];
+      if (c.done && byKey[k] === undefined) {
+        rows.push({ memberId: c.memberId, key: c.key, doneAt: now, doneBy: me.name });
+      } else if (!c.done && byKey[k] !== undefined) {
+        remove[byKey[k]] = true;
+      }
+    });
+    writeTable_('progDone', rows.filter((r, i) => !remove[i]));
+    return { saved: Object.keys(changes).length };
+  });
+}
+
+/**
+ * Chief: create / edit a group. payload: { id?, name, kind: 'stage'|'badges', items: "one per line" }.
+ * Items keep their ticks when their name stays the same; removed items lose them.
+ */
+function saveProgGroup_(p, token) {
+  const me = requireAdmin_(token);
+  const name = String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  if (!name) throw new Error('Give it a name.');
+  const kind = p.kind === 'badges' ? 'badges' : 'stage';
+  const names = [];
+  const seen = {};
+  String(p.items || '').split(/\r?\n/).map(x => x.replace(/\s+/g, ' ').trim().slice(0, 120)).forEach(x => {
+    if (x && !seen[memberId_(x) || x]) { seen[memberId_(x) || x] = true; names.push(x); }
+  });
+  return withLock_(() => {
+    progGroups_();
+    const groups = readTable_('progGroups').map(stripRow_);
+    let g = p.id ? groups.find(x => x.id === p.id) : null;
+    if (p.id && !g) throw new Error('Not found.');
+    if (!g) { g = { id: newId_('g'), order: String(groups.length) }; groups.push(g); }
+    g.name = name;
+    g.kind = kind;
+    const items = readTable_('progItems').map(stripRow_);
+    const mine = items.filter(i => i.groupId === g.id);
+    const byName = {};
+    mine.forEach(i => { byName[memberId_(i.name) || i.name] = i; });
+    const kept = names.map((n, idx) => {
+      const old = byName[memberId_(n) || n];
+      return { id: old ? old.id : newId_('i'), groupId: g.id, name: n, order: String(idx) };
+    });
+    const keptIds = {};
+    kept.forEach(i => { keptIds[i.id] = true; });
+    const gone = {};
+    mine.forEach(i => { if (!keptIds[i.id]) gone[i.id] = true; });
+    writeTable_('progGroups', groups);
+    writeTable_('progItems', items.filter(i => i.groupId !== g.id).concat(kept));
+    if (Object.keys(gone).length) writeTable_('progDone', readTable_('progDone').map(stripRow_).filter(d => !gone[d.key]));
+    return Object.assign(prog_(me), { id: g.id });
+  });
+}
+
+function deleteProgGroup_(p, token) {
+  const me = requireAdmin_(token);
+  return withLock_(() => {
+    progGroups_();
+    const items = readTable_('progItems').map(stripRow_);
+    const gone = { ['obtained:' + p.id]: true };
+    items.forEach(i => { if (i.groupId === p.id) gone[i.id] = true; });
+    writeTable_('progGroups', readTable_('progGroups').map(stripRow_).filter(g => g.id !== p.id));
+    writeTable_('progItems', items.filter(i => i.groupId !== p.id));
+    writeTable_('progDone', readTable_('progDone').map(stripRow_).filter(d => !gone[d.key]));
+    return prog_(me);
+  });
+}
+
 const DEFAULT_EVENTS = [
   { id: 'ev_camp-patrouille', title: 'Camp Patrouille' },
   { id: 'ev_camp-noel', title: 'Camp Noël' },
@@ -666,7 +817,8 @@ function setMeeting_(p, token) {
 function saveReporter_(p, token) {
   requireAdmin_(token);
   const name = cleanName_(p.name);
-  const role = ['admin', 'cp', 'sp'].indexOf(p.role) >= 0 ? p.role : 'cp';   // Chief, CP (green name) or SP (red name)
+  if (p.role === 'sp') throw new Error('SPs do not have access to the app.');
+  const role = p.role === 'admin' ? 'admin' : 'cp';   // Chief or CP
   const patrols = (Array.isArray(p.patrols) ? p.patrols : []).map(String).filter(Boolean);
   return withLock_(() => {
     const rows = readTable_('reporters').map(stripRow_);
@@ -797,8 +949,8 @@ function moveDatabaseNextTo_(fileId) {
  */
 function createLeaderAccounts_(p, token) {
   requireAdmin_(token);
-  const leaders = readTable_('members').filter(m => m.active !== '0' && m.leader);
-  if (!leaders.length) throw new Error('No CP or SP found. Write their names in green (CP) or red (SP) in the members file.');
+  const leaders = readTable_('members').filter(m => m.active !== '0' && m.leader && m.leader !== 'red');   // CPs only
+  if (!leaders.length) throw new Error('No CP found. Write their names in green in the members file.');
   return withLock_(() => {
     const rows = readTable_('reporters').map(stripRow_);
     const taken = {};
@@ -808,7 +960,7 @@ function createLeaderAccounts_(p, token) {
     leaders.forEach(m => {
       if (taken[memberId_(m.name)]) { existing.push({ name: m.name, patrol: m.patrol }); return; }
       const pin = randomPin_();
-      const r = { id: newId_('r'), name: m.name, role: m.leader === 'red' ? 'sp' : 'cp', patrols: m.patrol, createdAt: nowIso_() };
+      const r = { id: newId_('r'), name: m.name, role: 'cp', patrols: m.patrol, createdAt: nowIso_() };
       r.pinHash = hash_(r.id + ':' + pin);
       rows.push(r);
       taken[memberId_(m.name)] = true;
@@ -1010,6 +1162,7 @@ function sendReminders_(phase, daysFromToday) {
   const members = readTable_('members').filter(m => m.active !== '0');
   const waiting = {};
   readTable_('reporters').forEach(r => {
+    if (isSp_(r)) return;
     const scope = scopeOf_(publicReporter_(r));
     waiting[r.id] = members.some(m => (!scope || scope[m.patrol]) && !filled[m.id]);
   });
@@ -1230,7 +1383,7 @@ function auth_(token) {
   const payload = parts[0] + '.' + parts[1];
   if (sign_(payload) !== parts[2] || Number(parts[1]) < Date.now()) throw new Error('AUTH');
   const r = readTable_('reporters').find(x => x.id === parts[0]);
-  if (!r) throw new Error('AUTH');
+  if (!r || isSp_(r)) throw new Error('AUTH');
   return publicReporter_(r);
 }
 

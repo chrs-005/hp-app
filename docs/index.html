@@ -454,6 +454,33 @@ label.field + label.field { margin-top: 12px; }
 .pick-list input { width: 18px; height: 18px; accent-color: var(--accent); }
 .pick-list .pl-head { background: var(--surface-2); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 
+/* ---------- presence sub-sections & progression ---------- */
+.stack > * + * { margin-top: 14px; }
+.psub-nav { max-width: 480px; }
+.pg-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; border: 0; background: none; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.pg-row + .pg-row { border-top: 1px solid var(--hair); }
+.pg-row:hover { background: var(--surface-2); }
+.pg-row .grow { flex: 1; min-width: 0; }
+.pg-row .grow b { display: block; }
+.pg-row .pg-next { font-size: 12.5px; color: var(--text-2); }
+.pg-row .pg-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.pg-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 16px; border: 0; background: none; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.pg-item + .pg-item { border-top: 1px solid var(--hair); }
+.pg-box { width: 26px; height: 26px; border-radius: 8px; flex: none; display: grid; place-items: center; border: 2px solid var(--border); background: var(--surface-2); color: transparent; }
+.pg-item[aria-pressed="true"] .pg-box { background: var(--good); border-color: var(--good); color: #fff; }
+.pg-item .grow { flex: 1; min-width: 0; }
+.pg-item .when { display: block; font-size: 12px; color: var(--muted); }
+.pg-item[aria-pressed="true"] .nm { color: var(--text-2); }
+.badge-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 16px; }
+.badge-chip { min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); font-weight: 600; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; }
+.badge-chip .ic { opacity: .25; }
+.badge-chip[aria-pressed="true"] { background: var(--good-soft); color: var(--good-ink); border-color: var(--good); }
+.badge-chip[aria-pressed="true"] .ic { opacity: 1; }
+.obt-btn .ic { opacity: .25; }
+.obt-btn[aria-pressed="true"] { background: var(--good-soft); color: var(--good-ink); border-color: var(--good); }
+.obt-btn[aria-pressed="true"] .ic { opacity: 1; }
+.pg-head-right { display: flex; align-items: center; gap: 8px; }
+
 /* ---------- admin ---------- */
 .rep { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
 .rep + .rep { border-top: 1px solid var(--hair); }
@@ -554,6 +581,7 @@ const ICONS = {
   calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
   money: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v5M18 9.5v5"/>',
   back: '<path d="M14.5 6l-6 6 6 6"/>',
+  progress: '<path d="M4 20h16M6 16l4-4 3 3 5-6"/><path d="M15 9h3v3"/>',
   grid: '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 3.5v17"/>',
   download: '<path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/>',
 };
@@ -670,6 +698,9 @@ function indexData() {
   const D = S.data;
   D.events = D.events || [];   // older server version without camps / events
   D.money = D.money || { catalog: [], orders: [], lines: [] };
+  D.prog = D.prog || { groups: [], items: [], done: [] };
+  S.progDone = new Map(D.prog.done.map(d => [d.memberId + '|' + d.key, d]));
+  applyPendingProg();
   applyPendingTicks();   // taps not saved yet stay visible after a reload of the data
   S.att = new Map();
   D.attendance.forEach(a => S.att.set(a.date + '|' + a.memberId, a));
@@ -815,11 +846,11 @@ function showSaveState() {
   const el = $('#saveState');
   if (!el) return;
   clearTimeout(savedTimer);
-  const waiting = S.pending.size + moneyPending.size;
-  if ((S.saveError && S.pending.size) || (moneyError && moneyPending.size)) {
+  const waiting = S.pending.size + moneyPending.size + progBatch.pending.size;
+  if ((S.saveError && S.pending.size) || (moneyError && moneyPending.size) || (progBatch.error && progBatch.pending.size)) {
     el.className = 'save-state err busy';
     el.innerHTML = '<span class="dot"></span>Not saved – retrying';
-  } else if (waiting || S.inflight || moneyInflight) {
+  } else if (waiting || S.inflight || moneyInflight || progBatch.busy) {
     el.className = 'save-state busy';
     el.innerHTML = '<span class="dot"></span>Saving…';
   } else {
@@ -829,11 +860,12 @@ function showSaveState() {
   }
 }
 window.addEventListener('beforeunload', (e) => {
-  if (S.pending.size || S.inflight || moneyPending.size || moneyInflight) { e.preventDefault(); e.returnValue = ''; }
+  if (S.pending.size || S.inflight || moneyPending.size || moneyInflight || progBatch.pending.size || progBatch.busy) { e.preventDefault(); e.returnValue = ''; }
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') { flush(); flushMoney(); return; }
-  if (S.data && !S.pending.size && !S.inflight && !moneyPending.size && !moneyInflight && Date.now() - S.loadedAt > 60000) refresh(true);
+  if (document.visibilityState === 'hidden') { flush(); flushMoney(); progBatch.flush(); return; }
+  if (S.data && !S.pending.size && !S.inflight && !moneyPending.size && !moneyInflight && !progBatch.pending.size && !progBatch.busy &&
+    Date.now() - S.loadedAt > 60000) refresh(true);
 });
 
 // =================================================================== modal
@@ -904,6 +936,7 @@ async function loadState() {
 async function refresh(quiet) {
   if (S.pending.size || S.inflight) { await flush(); }
   await flushMoney();
+  await progBatch.flush();
   try {
     S.data = await call('state', quiet ? {} : { sync: true });
     S.loadedAt = Date.now();
@@ -1112,9 +1145,8 @@ function renderSetup() {
 // Add new sections of the app here: { id, label, icon, render(viewEl), admin? }.
 const TABS = [
   { id: 'home', label: 'Home', icon: 'home', render: renderHome },
-  { id: 'presence', label: 'Presence', icon: 'presence', render: renderPresence },
-  { id: 'overview', label: 'Overview', icon: 'grid', render: renderOverview, admin: true },
-  { id: 'stats', label: 'Stats', icon: 'stats', render: renderStats, admin: true },
+  { id: 'presence', label: 'Presence', icon: 'presence', render: renderPresenceTab },
+  { id: 'progression', label: 'Progression', icon: 'progress', render: renderProgression },
   { id: 'money', label: 'Money', icon: 'money', render: renderMoney, admin: true },
   { id: 'admin', label: 'Admin', icon: 'admin', render: renderAdmin, admin: true },
 ];
@@ -1146,6 +1178,7 @@ function renderShell() {
 
 function go(tabId, keepScroll) {
   if (gridTipHide) gridTipHide();
+  if (tabId === 'overview' || tabId === 'stats') { S.presenceSub = tabId; tabId = 'presence'; }   // now inside Presence
   const tabs = visibleTabs();
   const tab = tabs.find(t => t.id === tabId) || tabs[0];
   S.tab = tab.id;
@@ -1154,6 +1187,7 @@ function go(tabId, keepScroll) {
   $('#tbTitle').textContent = tab.id === 'home' ? S.data.settings.teamName : tab.label;
   const y = window.scrollY;
   const view = $('#view');
+  view.onclick = null;
   view.innerHTML = '';
   tab.render(view);
   window.scrollTo(0, keepScroll ? y : 0);
@@ -1238,6 +1272,244 @@ function attItem(r) {
     '<span class="avatar">' + esc(initials(r.m.name)) + '</span>' +
     '<span class="grow"><b>' + esc(r.m.name) + '</b><span class="why ' + (r.streakAlert || r.pctLevel === 'low' ? '' : 'warn') + '">' + icon('alert', 'sm') + esc(alertText(r)) + '</span></span>' +
     '<span class="muted small">' + esc(r.m.patrol) + '</span></button>';
+}
+
+// =================================================================== PRESENCE TAB (chief: Fill · Overview · Stats)
+function renderPresenceTab(v) {
+  if (!isAdmin()) { renderPresence(v); return; }
+  const sub = S.presenceSub || 'fill';
+  const SUBS = [['fill', 'Fill'], ['overview', 'Overview'], ['stats', 'Stats']];
+  v.innerHTML = '<div class="seg seg-mode psub-nav" role="tablist">' +
+    SUBS.map(x => '<button role="tab" data-psub="' + x[0] + '" aria-selected="' + (sub === x[0]) + '">' + x[1] + '</button>').join('') + '</div>' +
+    '<div class="stack" id="psub"></div>';
+  $$('[data-psub]', v).forEach(b => { b.onclick = () => { S.presenceSub = b.dataset.psub; renderPresenceTab(v); window.scrollTo(0, 0); }; });
+  const c = $('#psub', v);
+  ({ fill: renderPresence, overview: renderOverview, stats: renderStats })[sub](c);
+}
+
+// =================================================================== batched ticks (shared helper)
+/**
+ * Taps change the screen at once and are sent together after half a second of calm, in
+ * one request. Failed sends are retried; answers never undo newer taps.
+ */
+function makeBatcher(action, keyOf) {
+  let timer = null;
+  let inflight = null;
+  const b = {
+    pending: new Map(),
+    error: null,
+    get busy() { return !!inflight; },
+    add(change) {
+      const k = keyOf(change);
+      b.pending.set(k, Object.assign(b.pending.get(k) || {}, change));
+      clearTimeout(timer);
+      timer = setTimeout(b.flush, 500);
+      showSaveState();
+    },
+    async flush() {
+      clearTimeout(timer);
+      while (inflight) await inflight;
+      if (!b.pending.size) return;
+      const batch = Array.from(b.pending.values());
+      b.pending.clear();
+      let retry = false;
+      inflight = call(action, { changes: batch }).then(() => { b.error = null; }, (e) => {
+        if (e.message === 'AUTH') { logout(); return; }
+        if (e.server) { b.error = null; toast(e.message, 'bad'); setTimeout(() => refresh(true), 0); return; }
+        batch.forEach(c => { const k = keyOf(c); b.pending.set(k, Object.assign({}, c, b.pending.get(k) || {})); });
+        b.error = e.message;
+        retry = true;
+      });
+      showSaveState();
+      await inflight;
+      inflight = null;
+      showSaveState();
+      if (b.pending.size) timer = setTimeout(b.flush, retry ? 5000 : 300);
+    },
+  };
+  return b;
+}
+
+// =================================================================== PROGRESSION (CPs & chiefs)
+const progBatch = makeBatcher('progSet', (c) => c.memberId + '|' + c.key);
+function applyPendingProg() {
+  if (!S.progDone || !progBatch.pending.size) return;
+  progBatch.pending.forEach((c, k) => {
+    if (c.done) S.progDone.set(k, S.progDone.get(k) || { memberId: c.memberId, key: c.key, doneAt: new Date().toISOString(), doneBy: S.data.me.name });
+    else S.progDone.delete(k);
+  });
+}
+const progGroups = () => S.data.prog.groups;
+const progItemsOf = (gid) => S.data.prog.items.filter(i => i.groupId === gid);
+const progIsDone = (memberId, key) => S.progDone.has(memberId + '|' + key);
+function progStatus(memberId, g) {
+  const items = progItemsOf(g.id);
+  const done = items.filter(i => progIsDone(memberId, i.id)).length;
+  return { n: items.length, done: done, left: items.length - done, obtained: progIsDone(memberId, 'obtained:' + g.id) };
+}
+/** "Next: Seconde classe · 4 étapes left" — the first stage not obtained yet. */
+function progNext(memberId) {
+  const g = progGroups().find(x => x.kind === 'stage' && !progStatus(memberId, x).obtained);
+  if (!g) return 'Every stage obtained';
+  const s = progStatus(memberId, g);
+  if (!s.n) return 'Next: ' + g.name;
+  return 'Next: ' + g.name + ' · ' + (s.left ? plural(s.left, 'étape') + ' left' : 'all étapes done');
+}
+function progToggle(memberId, key) {
+  const k = memberId + '|' + key;
+  const done = !S.progDone.has(k);
+  if (done) S.progDone.set(k, { memberId: memberId, key: key, doneAt: new Date().toISOString(), doneBy: S.data.me.name });
+  else S.progDone.delete(k);
+  progBatch.add({ memberId: memberId, key: key, done: done });
+  return done;
+}
+
+function renderProgression(v) {
+  const P = S.progView || (S.progView = { memberId: null, patrol: 'all' });
+  if (P.memberId && !S.data.members.some(m => m.id === P.memberId)) P.memberId = null;
+  if (P.memberId) { renderScoutProg(v, P); return; }
+  const patrols = myPatrols();
+  if (P.patrol !== 'all' && patrols.indexOf(P.patrol) < 0) P.patrol = 'all';
+  const members = activeMembers(P.patrol === 'all' ? patrols : [P.patrol]);
+  const stages = progGroups().filter(g => g.kind === 'stage');
+  const badges = progGroups().filter(g => g.kind === 'badges');
+  const shortName = (n) => n.replace(/^Seconde classe$/, '2nde classe').replace(/^Première classe$/, '1ère classe');
+
+  let html = '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>Progression</h1>' +
+    '<p class="sub">Étapes and badges of each scout. Tap a scout to tick what he did.</p></div>' +
+    (isAdmin() ? '<button class="btn sm" id="progEdit">Edit étapes &amp; badges</button>' : '') + '</div>';
+  if (patrols.length > 1) {
+    html += '<div class="chips">' + ['all'].concat(patrols).map(p =>
+      '<button class="chip" data-pgpatrol="' + esc(p) + '" aria-pressed="' + (P.patrol === p) + '" style="--pc:' + (p === 'all' ? 'var(--none)' : patrolColor(p)) + '">' +
+      (p === 'all' ? 'All patrols' : '<span class="pdot"></span>' + esc(p)) + '</button>').join('') + '</div>';
+  }
+  html += '<section class="card">' + (members.length ? members.map(m => {
+    const pills = stages.map(g => {
+      const s = progStatus(m.id, g);
+      if (s.obtained) return '<span class="pill good">' + icon('check', 'sm') + esc(shortName(g.name)) + '</span>';
+      return '<span class="pill">' + esc(shortName(g.name)) + ' <b>' + (s.n ? s.done + '/' + s.n : '–') + '</b></span>';
+    }).join('') + badges.map(g => {
+      const s = progStatus(m.id, g);
+      return '<span class="pill accent">' + esc(g.name) + ' <b>' + s.done + '</b></span>';
+    }).join('');
+    return '<button class="pg-row" data-pgscout="' + esc(m.id) + '" style="--pc:' + patrolColor(m.patrol) + '"><span class="avatar">' + esc(initials(m.name)) + '</span>' +
+      '<span class="grow"><b>' + esc(m.name) + '</b><span class="pg-next">' + esc(m.patrol) + ' · ' + esc(progNext(m.id)) + '</span>' +
+      '<span class="pg-pills">' + pills + '</span></span>' + icon('right', 'sm') + '</button>';
+  }).join('') : '<p class="empty">No scouts.</p>') + '</section>';
+  v.innerHTML = html;
+  $$('[data-pgpatrol]', v).forEach(b => { b.onclick = () => { P.patrol = b.dataset.pgpatrol; renderProgression(v); }; });
+  $$('[data-pgscout]', v).forEach(b => { b.onclick = () => { P.memberId = b.dataset.pgscout; renderProgression(v); window.scrollTo(0, 0); }; });
+  if ($('#progEdit', v)) $('#progEdit', v).onclick = () => openProgEditor(() => go('progression', true));
+}
+
+function renderScoutProg(v, P) {
+  const m = S.data.members.find(x => x.id === P.memberId);
+  const when = (key) => { const d = S.progDone.get(m.id + '|' + key); return d ? fmtShort(isoOf(new Date(d.doneAt))) + (d.doneBy ? ' · ' + d.doneBy : '') : ''; };
+  let html = '<button class="btn ghost sm" id="pgBack" style="padding-left:0">' + icon('back', 'sm') + 'All scouts</button>' +
+    '<div class="row" style="flex-wrap:nowrap;--pc:' + patrolColor(m.patrol) + '"><span class="avatar">' + esc(initials(m.name)) + '</span>' +
+    '<div><h1 style="font-size:22px">' + esc(m.name) + '</h1><p class="sub" style="margin:0">' + esc(m.patrol) + (m.birthYear ? ' · ' + esc(m.birthYear) : '') + ' · <span id="pgNext">' + esc(progNext(m.id)) + '</span></p></div></div>';
+  html += progGroups().map(g => {
+    const items = progItemsOf(g.id);
+    const s = progStatus(m.id, g);
+    if (g.kind === 'badges') {
+      return '<section class="card" data-group="' + esc(g.id) + '"><div class="card-head"><h2>' + esc(g.name) + '</h2><span class="pill accent" data-gcount>' + s.done + (items.length ? ' / ' + items.length : '') + '</span></div>' +
+        (items.length ? '<div class="badge-grid">' + items.map(i =>
+          '<button class="badge-chip" data-pgkey="' + esc(i.id) + '" aria-pressed="' + progIsDone(m.id, i.id) + '" title="' + esc(when(i.id)) + '">' + icon('check', 'sm') + esc(i.name) + '</button>').join('') + '</div>'
+          : '<p class="empty">' + (isAdmin() ? 'No badges in the list yet. Add them with "Edit étapes & badges".' : 'The chief has not added the badges yet.') + '</p>') + '</section>';
+    }
+    return '<section class="card" data-group="' + esc(g.id) + '"><div class="card-head"><h2>' + esc(g.name) + '</h2><div class="pg-head-right">' +
+        (items.length ? '<span class="pill" data-gcount>' + s.done + '/' + s.n + '</span>' : '') +
+        '<button class="btn sm obt-btn" data-pgkey="obtained:' + esc(g.id) + '" aria-pressed="' + s.obtained + '">' + icon('check', 'sm') + (s.obtained ? 'Obtained' : 'Not obtained') + '</button></div></div>' +
+      (items.length ? '<div class="progress" style="margin:12px 16px 2px"><span class="good" data-gbar style="width:' + (s.done / s.n * 100) + '%"></span></div>' +
+        '<p class="small muted" style="margin:6px 16px 0" data-gleft>' + (s.left ? plural(s.left, 'étape') + ' left' : 'All étapes done') + '</p>' +
+        items.map(i => '<button class="pg-item" data-pgkey="' + esc(i.id) + '" aria-pressed="' + progIsDone(m.id, i.id) + '"><span class="pg-box">' + icon('check', 'sm') + '</span>' +
+          '<span class="grow"><span class="nm">' + esc(i.name) + '</span><span class="when">' + esc(when(i.id)) + '</span></span></button>').join('')
+        : '<p class="empty">' + (isAdmin() ? 'No étapes yet. Add them with "Edit étapes & badges" (Progression list).' : 'The chief has not added the étapes for ' + esc(g.name) + ' yet.') + '</p>') +
+      '</section>';
+  }).join('');
+  v.innerHTML = html;
+  $('#pgBack', v).onclick = () => { P.memberId = null; renderProgression(v); };
+  v.onclick = (e) => {
+    const b = e.target.closest('[data-pgkey]');
+    if (!b || !v.contains(b)) return;
+    const key = b.dataset.pgkey;
+    const done = progToggle(m.id, key);
+    b.setAttribute('aria-pressed', String(done));
+    if (key.indexOf('obtained:') === 0) b.lastChild.textContent = done ? 'Obtained' : 'Not obtained';
+    const w = b.querySelector('.when');
+    if (w) w.textContent = when(key);
+    // refresh the counters of that group and the "next" line, without redrawing the page
+    const sec = b.closest('[data-group]');
+    const g = progGroups().find(x => x.id === sec.dataset.group);
+    const s = progStatus(m.id, g);
+    const cnt = $('[data-gcount]', sec);
+    if (cnt) cnt.textContent = g.kind === 'badges' ? s.done + (s.n ? ' / ' + s.n : '') : s.done + '/' + s.n;
+    const bar = $('[data-gbar]', sec);
+    if (bar) bar.style.width = (s.n ? s.done / s.n * 100 : 0) + '%';
+    const left = $('[data-gleft]', sec);
+    if (left) left.textContent = s.left ? plural(s.left, 'étape') + ' left' : 'All étapes done';
+    $('#pgNext', v).textContent = progNext(m.id);
+  };
+}
+
+/** Chief: the stages and badge list. Étapes / badges are typed one per line. */
+function openProgEditor(after) {
+  openModal('<h2>Étapes &amp; badges</h2><p class="sub">Each stage has its étapes; Badges is the list of badges. Tap one to edit it.</p>' +
+    '<div style="margin-top:8px">' + progGroups().map(g =>
+      '<div class="rep"><div class="grow"><b>' + esc(g.name) + '</b><div class="tags"><span class="pill">' + (g.kind === 'badges' ? 'Badges' : 'Stage') + '</span>' +
+      '<span class="pill">' + plural(progItemsOf(g.id).length, g.kind === 'badges' ? 'badge' : 'étape') + '</span></div></div>' +
+      '<button class="btn sm" data-pgg="' + esc(g.id) + '">Edit</button></div>').join('') + '</div>' +
+    '<div class="modal-actions"><button class="btn" id="pggNew">' + icon('plus', 'sm') + 'New stage</button><span class="spacer"></span><button class="btn primary" data-close>Done</button></div>', {
+    wide: true,
+    onClose: () => { if (after) after(); },
+    onMount: (md, close) => {
+      $$('[data-pgg]', md).forEach(b => { b.onclick = () => { close(); editProgGroup(progGroups().find(g => g.id === b.dataset.pgg), after); }; });
+      $('#pggNew', md).onclick = () => { close(); editProgGroup(null, after); };
+    },
+  });
+}
+
+function editProgGroup(g, after) {
+  const isNew = !g;
+  g = g || { name: '', kind: 'stage' };
+  const items = isNew ? [] : progItemsOf(g.id).map(i => i.name);
+  openModal('<h2>' + (isNew ? 'New stage' : esc(g.name)) + '</h2>' +
+    '<form id="pggForm" style="margin-top:14px">' +
+      '<label class="field">Name<input class="input" name="name" maxlength="60" required value="' + esc(g.name) + '"></label>' +
+      '<label class="field">Type<select class="input" name="kind"><option value="stage">Stage (with étapes and "Obtained")</option><option value="badges"' + (g.kind === 'badges' ? ' selected' : '') + '>Badges list</option></select></label>' +
+      '<label class="field">' + (g.kind === 'badges' ? 'Badges' : 'Étapes') + ' — one per line<textarea class="input" name="items" rows="10" style="font-size:16px;line-height:1.5">' + esc(items.join('\n')) + '</textarea></label>' +
+      '<p class="muted small" style="margin-top:6px">Lines you keep keep their ticks. A line you remove loses its ticks.</p>' +
+      '<p class="err" id="pggErr"></p><div class="modal-actions">' + (!isNew ? '<button type="button" class="btn danger" id="pggDel">Delete</button><span class="spacer"></span>' : '') +
+      '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button></div></form>', {
+    wide: true,
+    onMount: (md, close) => {
+      const f = $('#pggForm', md);
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          await progBatch.flush();
+          const res = await call('saveProgGroup', { id: g.id, name: f.elements.name.value, kind: f.elements.kind.value, items: f.elements.items.value });
+          S.data.prog = { groups: res.groups, items: res.items, done: res.done };
+          indexData();
+          close();
+          toast('Saved');
+          if (after) after();
+        } catch (err) { $('#pggErr', md).textContent = err.message; }
+      };
+      if ($('#pggDel', md)) $('#pggDel', md).onclick = async () => {
+        close();
+        if (!await confirmBox('Delete ' + g.name + '?', 'Its ' + (g.kind === 'badges' ? 'badges' : 'étapes') + ' and every tick on them are deleted.', 'Delete', true)) return;
+        try {
+          await progBatch.flush();
+          const res = await call('deleteProgGroup', { id: g.id });
+          S.data.prog = res;
+          indexData();
+          toast('Deleted');
+          if (after) after();
+        } catch (err) { toast(err.message, 'bad'); }
+      };
+    },
+  });
 }
 
 // =================================================================== PRESENCE
@@ -2736,19 +3008,18 @@ const nameKey = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').
 function drawLeaders() {
   const el = $('#leadersCard');
   if (!el) return;
-  const leaders = activeMembers().filter(m => m.leader);
+  const leaders = activeMembers().filter(m => m.leader && m.leader !== 'red');   // CPs (green names)
   const hasAccount = new Set(S.data.reporters.map(r => nameKey(r.name)));
   const missing = leaders.filter(m => !hasAccount.has(nameKey(m.name)));
   el.innerHTML =
-    '<div class="card-head"><h2>CP &amp; SP</h2><span class="pill accent">' + leaders.length + '</span></div><div class="card-body">' +
-    '<p class="sub" style="margin:0 0 10px">Names written in <b>green</b> (CP) or <b>red</b> (SP) in the members file. Each one fills the attendance of his own patrol.</p>' +
+    '<div class="card-head"><h2>CP</h2><span class="pill accent">' + leaders.length + '</span></div><div class="card-body">' +
+    '<p class="sub" style="margin:0 0 10px">Names written in <b>green</b> in the members file. Each CP fills the attendance and progression of his own patrol. SPs (red names) do not use the app.</p>' +
     (leaders.length ? leaders.map(m =>
       '<div class="rep" style="--pc:' + patrolColor(m.patrol) + '"><span class="avatar">' + esc(initials(m.name)) + '</span><div class="grow"><b>' + esc(m.name) + '</b><div class="tags">' +
         '<span class="pill"><span class="pdot"></span>' + esc(m.patrol) + '</span>' +
-        '<span class="pill">' + esc(m.leader === 'red' ? 'SP' : 'CP') + '</span>' +
         (hasAccount.has(nameKey(m.name)) ? '<span class="pill accent">' + icon('check', 'sm') + 'Has an account</span>' : '<span class="pill warn">No account yet</span>') +
       '</div></div></div>').join('') :
-      '<p class="muted">No CP or SP found yet. Write their names in green (CP) or red (SP) in the members file.</p>') +
+      '<p class="muted">No CP found yet. Write their names in green in the members file.</p>') +
     (missing.length ? '<button class="btn primary block" id="mkLeaders" style="margin-top:12px">' + icon('plus', 'sm') + 'Create ' + plural(missing.length, 'account') + ' with PINs</button>' : '') +
     '</div>';
   const btn = $('#mkLeaders', el);
@@ -2803,7 +3074,7 @@ function drawReporters() {
   const reps = S.data.reporters.slice().sort((a, b) => (a.role === b.role ? a.name.localeCompare(b.name) : a.role === 'admin' ? -1 : 1));
   el.innerHTML = reps.map(r =>
     '<div class="rep"><span class="avatar">' + esc(initials(r.name)) + '</span><div class="grow"><b>' + esc(r.name) + '</b><div class="tags">' +
-      '<span class="pill accent">' + roleLabel(r) + '</span>' +
+      '<span class="pill ' + (roleKey(r) === 'sp' ? 'bad' : 'accent') + '">' + roleLabel(r) + (roleKey(r) === 'sp' ? ' · no access' : '') + '</span>' +
       (r.patrols.length ? r.patrols.map(p => '<span class="pill"><span class="pdot" style="--pc:' + patrolColor(p) + '"></span>' + esc(p) + '</span>').join('') : '<span class="pill">All patrols</span>') +
     '</div></div><button class="btn sm" data-rep="' + esc(r.id) + '">Edit</button></div>').join('') ||
     '<p class="empty">No reporters yet.</p>';
@@ -2821,7 +3092,7 @@ function editReporter(r) {
       '<label class="field">Name<input class="input" name="name" maxlength="60" required value="' + esc(r.name) + '"></label>' +
       '<label class="field">' + (isNew ? 'PIN (4 digits)' : 'New PIN (leave empty to keep the current one)') +
         '<input class="input" name="pin" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off"' + (isNew ? ' required' : '') + '></label>' +
-      '<label class="field">Role<select class="input" name="role">' + [['cp', 'CP'], ['sp', 'SP'], ['admin', 'Chief (sees stats &amp; admin)']].map(o => '<option value="' + o[0] + '"' + (roleKey(r) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></label>' +
+      '<label class="field">Role<select class="input" name="role">' + [['cp', 'CP'], ['admin', 'Chief (sees everything)']].map(o => '<option value="' + o[0] + '"' + (roleKey(r) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></label>' +
       '<div class="field" style="margin-top:12px;font-size:13px;font-weight:600;color:var(--text-2)">In charge of (none ticked = all patrols)</div>' +
       '<div class="check-grid">' + S.data.patrols.map(p => '<label class="check"><input type="checkbox" name="patrols" value="' + esc(p) + '"' + (r.patrols.indexOf(p) >= 0 ? ' checked' : '') + '><span class="pdot" style="--pc:' + patrolColor(p) + '"></span>' + esc(p) + '</label>').join('') + '</div>' +
       '<p class="err" id="repErr"></p>' +

@@ -73,6 +73,22 @@
     const single = mon.lines.filter(l => l.orderId === mon.id);
     call('setLines', { ids: single.map(l => l.id), paid: true }, token);
     call('updateLine', { id: single[1].id, given: true }, token);
+
+    // Progression: sample étapes / badges (made up) and a few ticks.
+    let prog = call('state', {}, token).prog;
+    const g = prog.groups;
+    call('saveProgGroup', { id: g[0].id, name: g[0].name, kind: 'stage', items: ['Étape 1', 'Étape 2', 'Étape 3', 'Étape 4', 'Étape 5'].join(String.fromCharCode(10)) }, token);
+    call('saveProgGroup', { id: g[1].id, name: g[1].name, kind: 'stage', items: ['Étape A', 'Étape B', 'Étape C', 'Étape D', 'Étape E', 'Étape F'].join(String.fromCharCode(10)) }, token);
+    prog = call('saveProgGroup', { id: g[4].id, name: g[4].name, kind: 'badges', items: ['Badge 1', 'Badge 2', 'Badge 3', 'Badge 4'].join(String.fromCharCode(10)) }, token);
+    const it = (gid) => prog.items.filter(x => x.groupId === gid);
+    const changes = [];
+    members.forEach((m, i) => {
+      it(g[0].id).forEach((x, k) => { if (k < (i % 6)) changes.push({ memberId: m.id, key: x.id, done: true }); });
+      if (i % 6 === 5) changes.push({ memberId: m.id, key: 'obtained:' + g[0].id, done: true });
+      if (i % 6 === 5) it(g[1].id).forEach((x, k) => { if (k < i % 4) changes.push({ memberId: m.id, key: x.id, done: true }); });
+      it(g[4].id).forEach((x, k) => { if ((i + k) % 3 === 0) changes.push({ memberId: m.id, key: x.id, done: true }); });
+    });
+    call('progSet', { changes: changes }, token);
     return { token: token };
   }
 

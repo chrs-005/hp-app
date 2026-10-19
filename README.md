@@ -80,8 +80,9 @@ Then sign in with full name + PIN (asked only once).
 - **Presence** — *Réunions* (Saturdays) or *Camps & events* (Camp Patrouille, Camp Noël, Camp Pâques,
   Camp d'Été, plus any special event the chief creates). Two moments for each: **They said** (the answer
   before — by Wednesday for réunions) and **They came** (what really happened).
-- **Overview** — one grid like the Excel register: every scout × every camp, event and réunion.
-- **Stats** and **Admin** — chief only.
+- **Presence → Overview / Stats** (chief) — the grid like the Excel register, and the statistics.
+- **Progression** — CPs and chiefs: étapes to Promesse, Seconde classe, Première classe, Troupe Raider, and badges. The chief edits the lists (one per line).
+- **Money** and **Admin** — chief only. SPs do not have access to the app.
 
 ## Rules
 

@@ -47,14 +47,15 @@ assert.strictEqual(st.members.filter(m => m.leader).length, 11);
 assert.strictEqual(st.attendance.filter(a => /^\d{4}-/.test(a.date)).length, 50 * 6 + 20);
 assert.strictEqual(st.attendance.filter(a => a.date.indexOf('ev_') === 0).length, 50 + 15);
 assert.strictEqual(st.source.sheetName, '2025-2026');
-assert.strictEqual(st.reporters.length, 12);
+assert.strictEqual(st.reporters.length, 6);            // chief + 5 CPs (SPs get no account)
 const fauconLeads = st.reporters.filter(r => r.patrols.join() === 'Faucon');
-assert.strictEqual(fauconLeads.length, 3);
+assert.strictEqual(fauconLeads.length, 1);
+assert.ok(st.reporters.every(r => r.role === 'admin' || r.role === 'cp'));
 
-// Leader accounts: second run creates nothing, PINs are 6 digits.
+// CP accounts: second run creates nothing.
 const again = ok(call('createLeaderAccounts', {}, token));
 assert.strictEqual(again.created.length, 0);
-assert.strictEqual(again.existing.length, 11);
+assert.strictEqual(again.existing.length, 5);
 
 // Login by typed name (case / accents / spaces ignored), scope and lockout.
 const lead = fauconLeads[0];
@@ -127,18 +128,23 @@ const f2 = makeFakes({ source: source });
 const s2 = loadServer(code, f2);
 const c2 = (a, p, t) => ok(s2.api({ action: a, payload: p, token: t }));
 const t2 = c2('setup', { name: 'Chief', pin: '1234' }).token;
-assert.match(s2.api({ action: 'createLeaderAccounts', payload: {}, token: t2 }).error, /No CP or SP found/);
+assert.match(s2.api({ action: 'createLeaderAccounts', payload: {}, token: t2 }).error, /No CP found/);
 c2('syncSource', { url: SOURCE_URL, apply: true }, t2);
 const made = c2('createLeaderAccounts', {}, t2);
-assert.strictEqual(made.created.length, 11);
-// Green name = CP, red name = SP.
-const roles2 = {};
-made.reporters.forEach(r => { roles2[r.name] = r.role; });
-made.created.forEach(x => assert.strictEqual(roles2[x.name], x.leader === 'red' ? 'sp' : 'cp'));
-assert.strictEqual(made.created.filter(x => roles2[x.name] === 'cp').length, 5);
-assert.strictEqual(made.created.filter(x => roles2[x.name] === 'sp').length, 6);
-const asSp = c2('saveReporter', { name: 'Extra Person', pin: '4321', role: 'sp', patrols: ['Panda'] }, t2);
-assert.strictEqual(asSp.reporters.find(r => r.name === 'Extra Person').role, 'sp');
+assert.strictEqual(made.created.length, 5);              // only the green names (CPs)
+assert.ok(made.created.every(x => x.leader !== 'red'));
+assert.ok(made.reporters.filter(r => r.role !== 'admin').every(r => r.role === 'cp'));
+assert.match(s2.api({ action: 'saveReporter', payload: { name: 'Extra Person', pin: '4321', role: 'sp', patrols: ['Panda'] }, token: t2 }).error, /SPs do not have access/);
+// An SP account made before this change (role "sp", or old "reporter" with a red name) cannot sign in.
+const f2reps = f2.SpreadsheetApp.getActiveSpreadsheet().getSheetByName('reporters');
+const redName = s2.parseRoster_(sheet.grid, sheet.colors).members.find(m => m.leader === 'red').name;
+c2('saveReporter', { name: redName, pin: '5555', role: 'cp', patrols: ['Panda'] }, t2);
+const rr = f2reps.getRange(2, 1, f2reps.getLastRow() - 1, 6).getDisplayValues();
+const redRow = rr.findIndex(r => r[1] === redName) + 2;
+f2reps.getRange(redRow, 4, 1, 1).setValues([['reporter']]);
+assert.match(s2.api({ action: 'login', payload: { name: redName, pin: '5555' } }).error, /CPs and the chiefs only/);
+f2reps.getRange(redRow, 4, 1, 1).setValues([['sp']]);
+assert.match(s2.api({ action: 'login', payload: { name: redName, pin: '5555' } }).error, /CPs and the chiefs only/);
 const odd = c2('saveReporter', { name: 'Odd Role', pin: '4321', role: 'reporter', patrols: [] }, t2);
 assert.strictEqual(odd.reporters.find(r => r.name === 'Odd Role').role, 'cp');
 assert.ok(made.created.every(x => /^\d{4}$/.test(x.pin)));
@@ -245,9 +251,10 @@ assert.strictEqual(c6('state', {}, t6).reminders, true);
 const made6 = c6('createLeaderAccounts', {}, t6).created;
 const panda6 = made6.filter(x => x.patrol === 'Panda');
 const bison6 = made6.find(x => x.patrol === 'Bison');
+assert.strictEqual(panda6.length, 1);
 const tokOf = (x) => c6('login', { name: x.name, pin: x.pin }).token;
 c6('savePush', { endpoint: 'https://fcm.googleapis.com/fcm/send/panda-1' }, tokOf(panda6[0]));
-c6('savePush', { endpoint: 'https://web.push.apple.com/panda-2' }, tokOf(panda6[1]));
+c6('savePush', { endpoint: 'https://web.push.apple.com/panda-2' }, tokOf(panda6[0]));   // his second phone
 c6('savePush', { endpoint: 'https://updates.push.services.mozilla.com/bison' }, tokOf(bison6));
 assert.match(s6.api({ action: 'savePush', payload: { endpoint: 'http://evil' }, token: t6 }).error, /Bad subscription/);
 assert.match(s6.api({ action: 'testPush', payload: {}, token: t6 }).error, /Turn on reminders/);
@@ -398,6 +405,52 @@ assert.strictEqual(c3('state', {}, setup3.token).money.catalog.length, 6);   // 
 mon = c3('deleteOrder', { id: single }, setup3.token);
 assert.strictEqual(mon.lines.filter(l => l.orderId === single).length, 0);
 assert.strictEqual(ok(s3.api({ action: 'saveSettings', payload: { currency: 'LBP' }, token: setup3.token })).settings.currency, 'LBP');
+
+// ---- Progression: stages + badges, étapes edited later, CPs tick their own patrol.
+let pg = c3('state', {}, setup3.token).prog;
+assert.deepStrictEqual(pg.groups.map(g => g.name + ':' + g.kind),
+  ['Promesse:stage', 'Seconde classe:stage', 'Première classe:stage', 'Troupe Raider:stage', 'Badges:badges']);
+assert.deepStrictEqual([pg.items, pg.done], [[], []]);
+const promesse = pg.groups[0].id;
+pg = c3('saveProgGroup', { id: promesse, name: 'Promesse', kind: 'stage', items: 'Loi scoute\nPrière\n  Noeuds  \nPrière\n' }, setup3.token);
+const pItems = pg.items.filter(i => i.groupId === promesse);
+assert.deepStrictEqual(pItems.map(i => i.name), ['Loi scoute', 'Prière', 'Noeuds']);   // trimmed, no duplicates
+const scout = st7.members.find(m => m.patrol === 'Panda' && m.active);
+const other = st7.members.find(m => m.patrol === 'Requin' && m.active);
+let ps = c3('progSet', { changes: [
+  { memberId: scout.id, key: pItems[0].id, done: true }, { memberId: scout.id, key: pItems[1].id, done: true },
+  { memberId: scout.id, key: 'obtained:' + pg.groups[3].id, done: true }, { memberId: scout.id, key: 'nope', done: true },
+] }, setup3.token);
+assert.strictEqual(ps.saved, 3);
+pg = c3('state', {}, setup3.token).prog;
+assert.strictEqual(pg.done.filter(d => d.memberId === scout.id).length, 3);
+assert.ok(pg.done.every(d => d.doneAt && d.doneBy));
+c3('progSet', { changes: [{ memberId: scout.id, key: pItems[1].id, done: false }, { memberId: scout.id, key: pItems[0].id, done: true }] }, setup3.token);
+assert.strictEqual(c3('state', {}, setup3.token).prog.done.filter(d => d.memberId === scout.id).length, 2);
+// Renaming the list keeps ticks of étapes that stay; removed étapes lose their ticks.
+pg = c3('saveProgGroup', { id: promesse, name: 'Promesse', kind: 'stage', items: 'Loi scoute\nDevise' }, setup3.token);
+assert.deepStrictEqual(pg.items.filter(i => i.groupId === promesse).map(i => i.name), ['Loi scoute', 'Devise']);
+assert.ok(pg.done.some(d => d.key === pItems[0].id));
+// Badges group with badges; new group; delete group removes its ticks.
+const badges = pg.groups.find(g => g.kind === 'badges');
+pg = c3('saveProgGroup', { id: badges.id, name: 'Badges', kind: 'badges', items: 'Secourisme\nCuisine\nTopographie' }, setup3.token);
+const cook = pg.items.find(i => i.name === 'Cuisine');
+c3('progSet', { changes: [{ memberId: scout.id, key: cook.id, done: true }] }, setup3.token);
+pg = c3('saveProgGroup', { name: 'Totem', kind: 'stage', items: '' }, setup3.token);
+assert.strictEqual(pg.groups.length, 6);
+c3('progSet', { changes: [{ memberId: scout.id, key: 'obtained:' + pg.id, done: true }] }, setup3.token);
+pg = c3('deleteProgGroup', { id: pg.id }, setup3.token);
+assert.strictEqual(pg.groups.length, 5);
+assert.ok(!pg.done.some(d => d.key.indexOf('obtained:') === 0 && !pg.groups.some(g => 'obtained:' + g.id === d.key)));
+// A CP ticks his own patrol only, sees only his patrol, cannot edit the lists.
+c3('saveReporter', { name: 'Panda Cp', pin: '3333', role: 'cp', patrols: ['Panda'] }, setup3.token);
+const pcTok = c3('login', { name: 'Panda Cp', pin: '3333' }).token;
+const pcState = c3('state', {}, pcTok).prog;
+const pandaIds2 = new Set(st7.members.filter(m => m.patrol === 'Panda').map(m => m.id));
+assert.ok(pcState.done.every(d => pandaIds2.has(d.memberId)));
+assert.strictEqual(c3('progSet', { changes: [{ memberId: scout.id, key: cook.id, done: false }] }, pcTok).saved, 1);
+assert.match(s3.api({ action: 'progSet', payload: { changes: [{ memberId: other.id, key: cook.id, done: true }] }, token: pcTok }).error, /not in charge/);
+assert.match(s3.api({ action: 'saveProgGroup', payload: { name: 'X', kind: 'stage', items: '' }, token: pcTok }).error, /Only the chief/);
 
 // Setup with a bad link still creates the chief and reports the problem.
 const f4 = makeFakes({ source: source, standalone: true });
