@@ -345,6 +345,21 @@ c3('saveReporter', { name: 'Simple Cp', pin: '2222', role: 'cp', patrols: ['Pand
 const simpleTok = c3('login', { name: 'Simple Cp', pin: '2222' }).token;
 assert.strictEqual(c3('state', {}, simpleTok).money, null);
 assert.match(s3.api({ action: 'updateLine', payload: { id: sl[0].id, given: true }, token: simpleTok }).error, /Only the chief/);
+// Batched ticks (the app sends taps together): last value wins, untouched fields stay.
+const pl3 = c3('state', {}, setup3.token).money.lines.filter(l => l.orderId === pret);
+const tick = c3('tickLines', { changes: [
+  { id: pl3[10].id, given: true }, { id: pl3[10].id, paid: true }, { id: pl3[11].id, paid: true },
+  { id: pl3[11].id, paid: false }, { id: pl3[12].id, given: true }, { id: 'nope', given: true },
+] }, setup3.token);
+assert.strictEqual(tick.saved, 3);
+const after3 = c3('state', {}, setup3.token).money.lines;
+const L = (id) => after3.find(l => l.id === id);
+assert.ok(L(pl3[10].id).given && L(pl3[10].id).paid && L(pl3[10].id).givenAt);
+assert.ok(!L(pl3[11].id).paid && !L(pl3[11].id).given);
+assert.ok(L(pl3[12].id).given && L(pl3[12].id).paid === pl3[12].paid);
+assert.strictEqual(c3('tickLines', { changes: [] }, setup3.token).saved, 0);
+assert.match(s3.api({ action: 'tickLines', payload: { changes: [{ id: pl3[0].id, given: false }] }, token: c3('login', { name: 'Simple Cp', pin: '2222' }).token }).error, /Only the chief/);
+
 // Item catalog: the troupe's items, sizes, prices and how they can be ordered.
 const cat = c3('state', {}, setup3.token).money.catalog;
 assert.deepStrictEqual(cat.map(c => c.name), ['Chemise', 'Ceinture', 'Short', 'Prêt', 'Cotisation de l\'année']);

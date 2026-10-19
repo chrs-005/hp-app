@@ -670,6 +670,7 @@ function indexData() {
   const D = S.data;
   D.events = D.events || [];   // older server version without camps / events
   D.money = D.money || { catalog: [], orders: [], lines: [] };
+  applyPendingTicks();   // taps not saved yet stay visible after a reload of the data
   S.att = new Map();
   D.attendance.forEach(a => S.att.set(a.date + '|' + a.memberId, a));
   S.patrolIdx = new Map(D.patrols.map((p, i) => [p, i]));
@@ -814,10 +815,11 @@ function showSaveState() {
   const el = $('#saveState');
   if (!el) return;
   clearTimeout(savedTimer);
-  if (S.saveError && S.pending.size) {
+  const waiting = S.pending.size + moneyPending.size;
+  if ((S.saveError && S.pending.size) || (moneyError && moneyPending.size)) {
     el.className = 'save-state err busy';
     el.innerHTML = '<span class="dot"></span>Not saved – retrying';
-  } else if (S.pending.size || S.inflight) {
+  } else if (waiting || S.inflight || moneyInflight) {
     el.className = 'save-state busy';
     el.innerHTML = '<span class="dot"></span>Saving…';
   } else {
@@ -827,11 +829,11 @@ function showSaveState() {
   }
 }
 window.addEventListener('beforeunload', (e) => {
-  if (S.pending.size || S.inflight) { e.preventDefault(); e.returnValue = ''; }
+  if (S.pending.size || S.inflight || moneyPending.size || moneyInflight) { e.preventDefault(); e.returnValue = ''; }
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') { flush(); return; }
-  if (S.data && !S.pending.size && !S.inflight && Date.now() - S.loadedAt > 60000) refresh(true);
+  if (document.visibilityState === 'hidden') { flush(); flushMoney(); return; }
+  if (S.data && !S.pending.size && !S.inflight && !moneyPending.size && !moneyInflight && Date.now() - S.loadedAt > 60000) refresh(true);
 });
 
 // =================================================================== modal
@@ -901,6 +903,7 @@ async function loadState() {
 /** quiet = background refresh. The ↻ button (not quiet) also checks the Drive members file now. */
 async function refresh(quiet) {
   if (S.pending.size || S.inflight) { await flush(); }
+  await flushMoney();
   try {
     S.data = await call('state', quiet ? {} : { sync: true });
     S.loadedAt = Date.now();
@@ -1682,37 +1685,113 @@ function lineRowHtml(l, label, sub) {
   const m = memberOf(l.memberId);
   return '<div class="mline st-' + st + '" data-line="' + esc(l.id) + '" style="--pc:' + patrolColor(m.patrol) + '">' +
     '<button class="ml-main" data-ledit="' + esc(l.id) + '"><span class="avatar">' + esc(initials(m.name)) + '</span>' +
-      '<span class="ml-txt"><b>' + esc(label) + '</b><span>' + esc(sub) + (st !== 'open' ? ' · <span class="st ' + LINE_STATES[st].tone + '">' + LINE_STATES[st].label + '</span>' : '') + '</span></span></button>' +
+      '<span class="ml-txt"><b>' + esc(label) + '</b><span>' + esc(sub) + '<span class="st ' + LINE_STATES[st].tone + '">' + (st !== 'open' ? ' · ' + LINE_STATES[st].label : '') + '</span></span></span></button>' +
     '<div class="ml-ticks">' +
       '<button class="tick" data-tick="given" aria-pressed="' + l.given + '">' + icon('check', 'sm') + 'Given</button>' +
       '<button class="tick" data-tick="paid" aria-pressed="' + l.paid + '">' + icon('check', 'sm') + 'Paid</button>' +
     '</div></div>';
 }
 
-/** Ticks and line editing inside any list of lines. rerender() redraws the list after a change. */
-function wireLines(el, rerender) {
+/**
+ * Ticks and line editing inside any list of lines. A tap updates its row in place (the list
+ * does not move under your finger) and calls onTick(); rerender() redraws after an edit.
+ */
+function wireLines(el, rerender, onTick) {
   el.addEventListener('click', (e) => {
     const tick = e.target.closest('[data-tick]');
-    if (tick) { toggleLine(tick.closest('[data-line]').dataset.line, tick.dataset.tick, rerender); return; }
+    if (tick) {
+      const row = tick.closest('[data-line]');
+      toggleLine(row.dataset.line, tick.dataset.tick, row);
+      if (onTick) onTick();
+      return;
+    }
     const ed = e.target.closest('[data-ledit]');
-    if (ed) editLine(money().lines.find(l => l.id === ed.dataset.ledit), rerender);
+    if (ed) flushMoney().then(() => editLine(money().lines.find(l => l.id === ed.dataset.ledit), rerender));
   });
 }
 
-async function toggleLine(id, field, rerender) {
+function updateLineRow(row, l) {
+  const st = lineState(l);
+  row.className = 'mline st-' + st;
+  $$('[data-tick]', row).forEach(b => b.setAttribute('aria-pressed', String(!!l[b.dataset.tick])));
+  const label = $('.st', row);
+  if (label) {
+    label.className = 'st ' + LINE_STATES[st].tone;
+    label.textContent = st !== 'open' ? ' · ' + LINE_STATES[st].label : '';
+  }
+}
+
+// ---- Given / Paid taps are saved in batches: the screen changes at once, Google gets one
+// request for all the taps of the last half second, and answers never undo newer taps.
+const moneyPending = new Map();   // line id -> { id, given?, paid? }
+let moneyTimer = null;
+let moneyInflight = null;          // the request on its way
+let moneyError = null;
+
+function toggleLine(id, field, row) {
   const l = money().lines.find(x => x.id === id);
   if (!l) return;
-  const val = !l[field];
-  l[field] = val;
-  rerender();
-  try {
-    const res = await call('updateLine', { id: id, [field]: val });
-    if (res.line && l[field] === val) Object.assign(l, res.line);
-  } catch (e) {
-    l[field] = !val;
-    rerender();
-    toast(e.message, 'bad');
-  }
+  l[field] = !l[field];
+  l[field + 'At'] = l[field] ? new Date().toISOString() : '';
+  const c = moneyPending.get(id) || { id: id };
+  c[field] = l[field];
+  moneyPending.set(id, c);
+  if (row) updateLineRow(row, l);
+  clearTimeout(moneyTimer);
+  moneyTimer = setTimeout(flushMoney, 500);
+  showSaveState();
+}
+
+/** Sends the waiting taps now; resolves once they are saved (or queued again after a failure). */
+async function flushMoney() {
+  clearTimeout(moneyTimer);
+  while (moneyInflight) await moneyInflight;
+  if (!moneyPending.size) return;
+  const batch = Array.from(moneyPending.values());
+  moneyPending.clear();
+  let retry = false;
+  const send = () => call('tickLines', { changes: batch }).catch(async (e) => {
+    if (!/Unknown action/.test(e.message)) throw e;
+    // Server code not updated yet: save the taps one by one the old way.
+    for (const c of batch) {
+      const p = { id: c.id };
+      if (c.given !== undefined) p.given = c.given;
+      if (c.paid !== undefined) p.paid = c.paid;
+      await call('updateLine', p);
+    }
+  });
+  moneyInflight = send().then(() => { moneyError = null; }, (e) => {
+    if (e.message === 'AUTH') { logout(); return; }
+    if (e.server) {   // refused (not a network problem): show it and reload the real data
+      moneyError = null;
+      toast(e.message, 'bad');
+      setTimeout(() => refresh(true), 0);
+      return;
+    }
+    batch.forEach(c => moneyPending.set(c.id, Object.assign({}, c, moneyPending.get(c.id) || {})));
+    moneyError = e.message;
+    retry = true;
+  });
+  showSaveState();
+  await moneyInflight;
+  moneyInflight = null;
+  showSaveState();
+  if (moneyPending.size) moneyTimer = setTimeout(flushMoney, retry ? 5000 : 300);
+}
+
+/** Server data replaces the local copy, then the taps not saved yet are put back on top. */
+function setMoney(m) {
+  S.data.money = { catalog: m.catalog || [], orders: m.orders || [], lines: m.lines || [] };
+  applyPendingTicks();
+}
+function applyPendingTicks() {
+  if (!S.data || !S.data.money || !moneyPending.size) return;
+  S.data.money.lines.forEach(l => {
+    const c = moneyPending.get(l.id);
+    if (!c) return;
+    if (c.given !== undefined) l.given = c.given;
+    if (c.paid !== undefined) l.paid = c.paid;
+  });
 }
 
 function renderOrder(v, M) {
@@ -1735,16 +1814,13 @@ function renderOrder(v, M) {
     '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>' + esc(orderTitle(o)) + '</h1><p class="sub">' + esc(sub) + '</p>' +
       (o.note ? '<p class="small muted" style="margin-top:4px">' + esc(o.note) + '</p>' : '') + '</div>' +
       '<div class="row"><button class="btn sm" id="oEdit">Edit</button><button class="btn sm" id="oCsv">' + icon('download', 'sm') + 'CSV</button><button class="btn sm danger" id="oDel">Delete</button></div></div>' +
-    '<div class="sum-pills"><span class="pill">Given <b>' + s.givenN + '/' + s.n + '</b></span><span class="pill">Paid <b>' + s.paidN + '/' + s.n + '</b></span>' +
-      '<span class="pill good">Collected ' + esc(fmtMoney(s.paid)) + ' / ' + esc(fmtMoney(s.total)) + '</span>' +
-      (s.owed ? '<span class="pill bad">Owes ' + esc(fmtMoney(s.owed)) + '</span>' : '') + (s.toGiveN ? '<span class="pill warn">To give ' + s.toGiveN + '</span>' : '') + '</div>';
+    '<div class="sum-pills" id="oSum">' + orderSumHtml(ls) + '</div>';
   if (troupe) {
     html += '<div class="chips">' + FILTERS.map(f => '<button class="chip" data-mfilter="' + f[0] + '" aria-pressed="' + (M.filter === f[0]) + '">' + f[1] + '</button>').join('') + '</div>' +
       (patrolsIn.length > 1 ? '<div class="chips">' + ['all'].concat(patrolsIn).map(p =>
         '<button class="chip" data-mpatrol="' + esc(p) + '" aria-pressed="' + (M.patrol === p) + '" style="--pc:' + (p === 'all' ? 'var(--none)' : patrolColor(p)) + '">' +
         (p === 'all' ? 'All patrols' : '<span class="pdot"></span>' + esc(p)) + '</button>').join('') + '</div>' : '') +
-      '<div class="row"><button class="btn sm" id="bulkGiven"' + (shown.some(l => !l.given) ? '' : ' disabled') + '>Mark the ' + shown.filter(l => !l.given).length + ' shown as given</button>' +
-        '<button class="btn sm" id="bulkPaid"' + (shown.some(l => !l.paid) ? '' : ' disabled') + '>Mark the ' + shown.filter(l => !l.paid).length + ' shown as paid</button>' +
+      '<div class="row"><button class="btn sm" id="bulkGiven"></button><button class="btn sm" id="bulkPaid"></button>' +
         '<button class="btn sm" id="addScouts">' + icon('plus', 'sm') + 'Add scouts</button></div>';
   }
   html += '<section class="card" id="oLines">' + (shown.length
@@ -1760,7 +1836,7 @@ function renderOrder(v, M) {
   $('#oEdit', v).onclick = () => editOrder(o);
   $('#oDel', v).onclick = async () => {
     if (!await confirmBox('Delete "' + orderTitle(o) + '"?', 'All its lines (who got it, who paid) are deleted too.', 'Delete', true)) return;
-    try { S.data.money = await call('deleteOrder', { id: o.id }); M.orderId = null; renderMoney(v); toast('Order deleted'); } catch (e) { toast(e.message, 'bad'); }
+    try { await flushMoney(); setMoney(await call('deleteOrder', { id: o.id })); M.orderId = null; renderMoney(v); toast('Order deleted'); } catch (e) { toast(e.message, 'bad'); }
   };
   $('#oCsv', v).onclick = () => {
     const q = (x) => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
@@ -1775,13 +1851,31 @@ function renderOrder(v, M) {
     const ids = shown.filter(l => !l[field]).map(l => l.id);
     if (!ids.length) return;
     if (!await confirmBox('Mark ' + ids.length + ' as ' + field + '?', 'Only the scouts shown in the list now.', 'Mark ' + ids.length)) return;
-    try { S.data.money = await call('setLines', { ids: ids, [field]: true }); again(); } catch (e) { toast(e.message, 'bad'); }
+    try { await flushMoney(); setMoney(await call('setLines', { ids: ids, [field]: true })); again(); } catch (e) { toast(e.message, 'bad'); }
   };
+  const counts = () => {
+    $('#oSum', v).innerHTML = orderSumHtml(ls);
+    [['#bulkGiven', 'given'], ['#bulkPaid', 'paid']].forEach(([sel, field]) => {
+      const b = $(sel, v);
+      if (!b) return;
+      const n = shown.filter(l => !l[field]).length;
+      b.textContent = 'Mark the ' + n + ' shown as ' + field;
+      b.disabled = !n;
+    });
+  };
+  counts();
   if ($('#bulkGiven', v)) $('#bulkGiven', v).onclick = () => bulk('given');
   if ($('#bulkPaid', v)) $('#bulkPaid', v).onclick = () => bulk('paid');
   if ($('#addScouts', v)) $('#addScouts', v).onclick = () => addScoutsToOrder(o, again);
   if ($('#addItem', v)) $('#addItem', v).onclick = () => addItemsToOrder(o, again);
-  wireLines($('#oLines', v), again);
+  wireLines($('#oLines', v), again, counts);
+}
+
+function orderSumHtml(ls) {
+  const s = moneySums(ls);
+  return '<span class="pill">Given <b>' + s.givenN + '/' + s.n + '</b></span><span class="pill">Paid <b>' + s.paidN + '/' + s.n + '</b></span>' +
+    '<span class="pill good">Collected ' + esc(fmtMoney(s.paid)) + ' / ' + esc(fmtMoney(s.total)) + '</span>' +
+    (s.owed ? '<span class="pill bad">Owes ' + esc(fmtMoney(s.owed)) + '</span>' : '') + (s.toGiveN ? '<span class="pill warn">To give ' + s.toGiveN + '</span>' : '');
 }
 
 const catalog = () => money().catalog || [];
@@ -1936,7 +2030,7 @@ function editOrder(o, presetMember) {
         }
         try {
           const res = await call('saveOrder', payload);
-          S.data.money = res;
+          setMoney(res);
           close();
           toast(isNew ? 'Order created' : 'Saved');
           S.moneyView = Object.assign(S.moneyView || {}, { orderId: res.id, filter: 'all', patrol: 'all' });
@@ -1961,7 +2055,7 @@ function addScoutsToOrder(o, done) {
       $('[data-ok]', m).onclick = async () => {
         const ids = $$('.pick-list input:checked', m).map(x => x.value);
         if (!ids.length) { close(); return; }
-        try { S.data.money = await call('addLines', { orderId: o.id, memberIds: ids }); close(); done(); } catch (e) { toast(e.message, 'bad'); }
+        try { setMoney(await call('addLines', { orderId: o.id, memberIds: ids })); close(); done(); } catch (e) { toast(e.message, 'bad'); }
       };
     },
   });
@@ -1976,7 +2070,7 @@ function addItemsToOrder(o, done) {
       wireItemRows($('#iRows', m));
       $('#moreRow', m).onclick = () => addItemRow($('#iRows', m), 'single');
       $('[data-ok]', m).onclick = async () => {
-        try { S.data.money = await call('addLines', { orderId: o.id, items: readItemRows(m) }); close(); done(); } catch (e) { $('#aiErr', m).textContent = e.message; }
+        try { setMoney(await call('addLines', { orderId: o.id, items: readItemRows(m) })); close(); done(); } catch (e) { $('#aiErr', m).textContent = e.message; }
       };
     },
   });
@@ -2011,7 +2105,7 @@ function editLine(l, done) {
         close();
         const paidNote = l.paid ? ' He already paid ' + fmtMoney(lineTotal(l)) + '.' : '';
         if (!await confirmBox((troupe ? 'Remove ' + m.name + '?' : 'Delete ' + lineLabel(l) + '?'), 'This line is deleted.' + esc(paidNote), 'Delete', true)) return;
-        try { S.data.money = await call('deleteLines', { ids: [l.id] }); done(); } catch (err) { toast(err.message, 'bad'); }
+        try { setMoney(await call('deleteLines', { ids: [l.id] })); done(); } catch (err) { toast(err.message, 'bad'); }
       };
     },
   });
@@ -2062,13 +2156,13 @@ function editCatalogItem(c, after) {
       f.onsubmit = async (e) => {
         e.preventDefault();
         try {
-          S.data.money = await call('saveCatalogItem', { id: c.id, name: f.elements.name.value, sizes: f.elements.sizes.value, price: f.elements.price.value, scope: f.elements.scope.value });
+          setMoney(await call('saveCatalogItem', { id: c.id, name: f.elements.name.value, sizes: f.elements.sizes.value, price: f.elements.price.value, scope: f.elements.scope.value }));
           toast('Saved');
           close();
         } catch (err) { $('#cErr', md).textContent = err.message; }
       };
       if ($('#cDel', md)) $('#cDel', md).onclick = async () => {
-        try { S.data.money = await call('deleteCatalogItem', { id: c.id }); toast('Deleted'); close(); } catch (err) { $('#cErr', md).textContent = err.message; }
+        try { setMoney(await call('deleteCatalogItem', { id: c.id })); toast('Deleted'); close(); } catch (err) { $('#cErr', md).textContent = err.message; }
       };
     },
   });
@@ -2082,9 +2176,7 @@ function openScoutMoney(memberId) {
     const s = moneySums(ls);
     const ordersById = new Map(money().orders.map(o => [o.id, o]));
     $('#smBody', md).innerHTML =
-      '<div class="sum-pills">' + (s.owed ? '<span class="pill bad">Owes ' + esc(fmtMoney(s.owed)) + '</span>' : '') +
-        (s.toGiveN ? '<span class="pill warn">To give ' + s.toGiveN + '</span>' : '') + '<span class="pill good">Paid ' + esc(fmtMoney(s.paid)) + '</span>' +
-        (!s.owed && !s.toGiveN && ls.length ? '<span class="pill good">' + icon('check', 'sm') + 'Settled</span>' : '') + '</div>' +
+      '<div class="sum-pills" id="smSum">' + scoutSumHtml(s, ls.length) + '</div>' +
       '<div class="card" style="margin-top:12px" id="smLines">' + (ls.length ? ls.map(l => {
         const o = ordersById.get(l.orderId) || {};
         return lineRowHtml(l, lineLabel(l), (o.kind === 'troupe' ? 'Troupe order · ' : 'Single order · ') + (l.qty > 1 ? l.qty + ' × ' : '') + fmtMoney(lineTotal(l) / (l.qty || 1)));
@@ -2097,10 +2189,18 @@ function openScoutMoney(memberId) {
     onClose: () => { if (S.tab === 'money') go('money', true); },
     onMount: (md, close) => {
       draw(md);
-      wireLines($('#smBody', md), () => draw(md));
+      wireLines($('#smBody', md), () => draw(md), () => {
+        $('#smSum', md).innerHTML = scoutSumHtml(moneySums(money().lines.filter(l => l.memberId === memberId)), 1);
+      });
       $('#smNew', md).onclick = () => { close(); editOrder({ kind: 'single' }, memberId); };
     },
   });
+}
+
+function scoutSumHtml(s, n) {
+  return (s.owed ? '<span class="pill bad">Owes ' + esc(fmtMoney(s.owed)) + '</span>' : '') +
+    (s.toGiveN ? '<span class="pill warn">To give ' + s.toGiveN + '</span>' : '') + '<span class="pill good">Paid ' + esc(fmtMoney(s.paid)) + '</span>' +
+    (!s.owed && !s.toGiveN && n ? '<span class="pill good">' + icon('check', 'sm') + 'Settled</span>' : '');
 }
 
 // =================================================================== OVERVIEW (grid like the Excel register)

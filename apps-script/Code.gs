@@ -92,6 +92,7 @@ const ACTIONS = {
   addLines: addLines_,
   updateLine: updateLine_,
   setLines: setLines_,
+  tickLines: tickLines_,
   deleteLines: deleteLines_,
   deleteOrder: deleteOrder_,
   saveCatalogItem: saveCatalogItem_,
@@ -302,10 +303,7 @@ function money_() {
   return {
     catalog: catalog_(),
     orders: readTable_('orders').map(o => ({ id: o.id, kind: o.kind, title: o.title, price: num(o.price), note: o.note, createdAt: o.createdAt })),
-    lines: readTable_('orderLines').map(l => ({
-      id: l.id, orderId: l.orderId, memberId: l.memberId, item: l.item, variant: l.variant, qty: num(l.qty) || 1, price: num(l.price),
-      given: l.given === '1', givenAt: l.givenAt, paid: l.paid === '1', paidAt: l.paidAt,
-    })),
+    lines: readTable_('orderLines').map(lineOut_),
   };
 }
 
@@ -373,6 +371,13 @@ function deleteCatalogItem_(p, token) {
     writeTable_('catalog', readTable_('catalog').map(stripRow_).filter(r => r.id !== p.id));
     return money_();
   });
+}
+
+function lineOut_(l) {
+  return {
+    id: l.id, orderId: l.orderId, memberId: l.memberId, item: l.item, variant: l.variant, qty: Number(l.qty) || 1, price: Number(l.price) || 0,
+    given: l.given === '1', givenAt: l.givenAt, paid: l.paid === '1', paidAt: l.paidAt,
+  };
 }
 
 function cleanMoney_(v) {
@@ -500,8 +505,41 @@ function updateLine_(p, token) {
       Object.assign(changes, { item: it.item, variant: it.variant, qty: String(it.qty), price: String(it.price) });
     }
     updateRow_('orderLines', l._row, changes);
-    const fresh = money_().lines.find(x => x.id === p.id);
-    return { line: fresh };
+    return { line: lineOut_(Object.assign({}, l, changes)) };
+  });
+}
+
+/**
+ * The Given / Paid taps, sent in batches: { changes: [{ id, given?, paid? }] }.
+ * One read and one write for the whole batch, so ticking 50 scouts in a row stays fast.
+ */
+function tickLines_(p, token) {
+  const me = requireAdmin_(token);
+  const byId = {};
+  (Array.isArray(p.changes) ? p.changes : []).slice(0, 2000).forEach(c => {
+    if (c && c.id) byId[c.id] = Object.assign(byId[c.id] || {}, c);
+  });
+  if (!Object.keys(byId).length) return { saved: 0 };
+  return withLock_(() => {
+    const now = nowIso_();
+    const lines = readTable_('orderLines').map(stripRow_);
+    let saved = 0;
+    lines.forEach(l => {
+      const c = byId[l.id];
+      if (!c) return;
+      ['given', 'paid'].forEach(k => {
+        if (c[k] === undefined) return;
+        const v = c[k] ? '1' : '';
+        if (l[k] === v) return;
+        l[k] = v;
+        l[k + 'At'] = v ? now : '';
+      });
+      l.updatedAt = now;
+      l.updatedBy = me.name;
+      saved++;
+    });
+    writeTable_('orderLines', lines);
+    return { saved: saved };
   });
 }
 
