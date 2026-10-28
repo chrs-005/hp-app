@@ -81,7 +81,7 @@ Then sign in with full name + PIN (asked only once).
   Camp d'Été, plus any special event the chief creates). Two moments for each: **They said** (the answer
   before — by Wednesday for réunions) and **They came** (what really happened).
 - **Presence → Overview / Stats** (chief) — the grid like the Excel register, and the statistics.
-- **Progression** — CPs and chiefs: étapes to Promesse, Seconde classe, Première classe, Troupe Raider, and badges. The chief edits the lists (one per line).
+- **Progression** — CPs and chiefs: level (Promesse < Seconde classe < Première classe < Troupe Raider; ticking a level ticks the ones before) and badges typed by name.
 - **Money** and **Admin** — chief only. SPs do not have access to the app.
 
 ## Rules

@@ -442,6 +442,14 @@ c3('progSet', { changes: [{ memberId: scout.id, key: 'obtained:' + pg.id, done: 
 pg = c3('deleteProgGroup', { id: pg.id }, setup3.token);
 assert.strictEqual(pg.groups.length, 5);
 assert.ok(!pg.done.some(d => d.key.indexOf('obtained:') === 0 && !pg.groups.some(g => 'obtained:' + g.id === d.key)));
+// Badges typed by name (one by one), trimmed; removing one deletes it.
+c3('progSet', { changes: [{ memberId: scout.id, key: 'badge:  Secourisme   avancé ', done: true }, { memberId: scout.id, key: 'badge:', done: true }] }, setup3.token);
+let bd = c3('state', {}, setup3.token).prog.done.filter(d => d.memberId === scout.id && d.key.indexOf('badge:') === 0);
+assert.deepStrictEqual(bd.map(d => d.key), ['badge:Secourisme avancé']);
+c3('progSet', { changes: [{ memberId: scout.id, key: 'badge:Secourisme avancé', done: false }] }, setup3.token);
+bd = c3('state', {}, setup3.token).prog.done.filter(d => d.memberId === scout.id && d.key.indexOf('badge:') === 0);
+assert.strictEqual(bd.length, 0);
+
 // A CP ticks his own patrol only, sees only his patrol, cannot edit the lists.
 c3('saveReporter', { name: 'Panda Cp', pin: '3333', role: 'cp', patrols: ['Panda'] }, setup3.token);
 const pcTok = c3('login', { name: 'Panda Cp', pin: '3333' }).token;

@@ -1336,26 +1336,51 @@ function applyPendingProg() {
 const progGroups = () => S.data.prog.groups;
 const progItemsOf = (gid) => S.data.prog.items.filter(i => i.groupId === gid);
 const progIsDone = (memberId, key) => S.progDone.has(memberId + '|' + key);
-function progStatus(memberId, g) {
-  const items = progItemsOf(g.id);
-  const done = items.filter(i => progIsDone(memberId, i.id)).length;
-  return { n: items.length, done: done, left: items.length - done, obtained: progIsDone(memberId, 'obtained:' + g.id) };
+/** The levels in order: Promesse < Seconde classe < Première classe < Troupe Raider. */
+const progLevels = () => progGroups().filter(g => g.kind === 'stage');
+const levelObtained = (memberId, g) => progIsDone(memberId, 'obtained:' + g.id);
+/** Highest level obtained, or null. */
+function progLevel(memberId) {
+  const got = progLevels().filter(g => levelObtained(memberId, g));
+  return got.length ? got[got.length - 1] : null;
 }
-/** "Next: Seconde classe · 4 étapes left" — the first stage not obtained yet. */
-function progNext(memberId) {
-  const g = progGroups().find(x => x.kind === 'stage' && !progStatus(memberId, x).obtained);
-  if (!g) return 'Every stage obtained';
-  const s = progStatus(memberId, g);
-  if (!s.n) return 'Next: ' + g.name;
-  return 'Next: ' + g.name + ' · ' + (s.left ? plural(s.left, 'étape') + ' left' : 'all étapes done');
+/** Badges of a scout: typed by name ("badge:<name>"), plus any ticked from an older badge list. */
+function scoutBadges(memberId) {
+  const out = [];
+  S.progDone.forEach((d, k) => {
+    if (d.memberId !== memberId) return;
+    if (d.key.indexOf('badge:') === 0) out.push({ key: d.key, name: d.key.slice(6), d: d });
+  });
+  progGroups().filter(g => g.kind === 'badges').forEach(g => progItemsOf(g.id).forEach(i => {
+    if (progIsDone(memberId, i.id)) out.push({ key: i.id, name: i.name, d: S.progDone.get(memberId + '|' + i.id) });
+  }));
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
-function progToggle(memberId, key) {
+/** Every badge name already given to someone (to suggest while typing). */
+function knownBadges() {
+  const names = new Set();
+  S.progDone.forEach(d => { if (d.key.indexOf('badge:') === 0) names.add(d.key.slice(6)); });
+  progGroups().filter(g => g.kind === 'badges').forEach(g => progItemsOf(g.id).forEach(i => names.add(i.name)));
+  return Array.from(names).sort();
+}
+function progSetKey(memberId, key, done) {
   const k = memberId + '|' + key;
-  const done = !S.progDone.has(k);
+  if (done === S.progDone.has(k)) return;
   if (done) S.progDone.set(k, { memberId: memberId, key: key, doneAt: new Date().toISOString(), doneBy: S.data.me.name });
   else S.progDone.delete(k);
   progBatch.add({ memberId: memberId, key: key, done: done });
-  return done;
+}
+/**
+ * Setting a level also sets every level below it (Première classe ⇒ Seconde ⇒ Promesse);
+ * removing a level also removes the ones above it.
+ */
+function setLevel(memberId, g, on) {
+  const levels = progLevels();
+  const idx = levels.findIndex(x => x.id === g.id);
+  levels.forEach((x, i) => {
+    if (on && i <= idx) progSetKey(memberId, 'obtained:' + x.id, true);
+    if (!on && i >= idx) progSetKey(memberId, 'obtained:' + x.id, false);
+  });
 }
 
 function renderProgression(v) {
@@ -1365,145 +1390,90 @@ function renderProgression(v) {
   const patrols = myPatrols();
   if (P.patrol !== 'all' && patrols.indexOf(P.patrol) < 0) P.patrol = 'all';
   const members = activeMembers(P.patrol === 'all' ? patrols : [P.patrol]);
-  const stages = progGroups().filter(g => g.kind === 'stage');
-  const badges = progGroups().filter(g => g.kind === 'badges');
+  const levels = progLevels();
   const shortName = (n) => n.replace(/^Seconde classe$/, '2nde classe').replace(/^Première classe$/, '1ère classe');
 
-  let html = '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>Progression</h1>' +
-    '<p class="sub">Étapes and badges of each scout. Tap a scout to tick what he did.</p></div>' +
-    (isAdmin() ? '<button class="btn sm" id="progEdit">Edit étapes &amp; badges</button>' : '') + '</div>';
+  let html = '<div><h1>Progression</h1><p class="sub">Promesse, Seconde classe, Première classe, Troupe Raider and badges. Tap a scout to update him.</p></div>';
   if (patrols.length > 1) {
     html += '<div class="chips">' + ['all'].concat(patrols).map(p =>
       '<button class="chip" data-pgpatrol="' + esc(p) + '" aria-pressed="' + (P.patrol === p) + '" style="--pc:' + (p === 'all' ? 'var(--none)' : patrolColor(p)) + '">' +
       (p === 'all' ? 'All patrols' : '<span class="pdot"></span>' + esc(p)) + '</button>').join('') + '</div>';
   }
   html += '<section class="card">' + (members.length ? members.map(m => {
-    const pills = stages.map(g => {
-      const s = progStatus(m.id, g);
-      if (s.obtained) return '<span class="pill good">' + icon('check', 'sm') + esc(shortName(g.name)) + '</span>';
-      return '<span class="pill">' + esc(shortName(g.name)) + ' <b>' + (s.n ? s.done + '/' + s.n : '–') + '</b></span>';
-    }).join('') + badges.map(g => {
-      const s = progStatus(m.id, g);
-      return '<span class="pill accent">' + esc(g.name) + ' <b>' + s.done + '</b></span>';
-    }).join('');
+    const top = progLevel(m.id);
+    const nb = scoutBadges(m.id).length;
+    const pills = levels.map(g => levelObtained(m.id, g)
+      ? '<span class="pill good">' + icon('check', 'sm') + esc(shortName(g.name)) + '</span>'
+      : '<span class="pill">' + esc(shortName(g.name)) + '</span>').join('') +
+      '<span class="pill accent">Badges <b>' + nb + '</b></span>';
     return '<button class="pg-row" data-pgscout="' + esc(m.id) + '" style="--pc:' + patrolColor(m.patrol) + '"><span class="avatar">' + esc(initials(m.name)) + '</span>' +
-      '<span class="grow"><b>' + esc(m.name) + '</b><span class="pg-next">' + esc(m.patrol) + ' · ' + esc(progNext(m.id)) + '</span>' +
+      '<span class="grow"><b>' + esc(m.name) + '</b><span class="pg-next">' + esc(m.patrol) + ' · ' + esc(top ? top.name : 'No level yet') + '</span>' +
       '<span class="pg-pills">' + pills + '</span></span>' + icon('right', 'sm') + '</button>';
   }).join('') : '<p class="empty">No scouts.</p>') + '</section>';
   v.innerHTML = html;
   $$('[data-pgpatrol]', v).forEach(b => { b.onclick = () => { P.patrol = b.dataset.pgpatrol; renderProgression(v); }; });
   $$('[data-pgscout]', v).forEach(b => { b.onclick = () => { P.memberId = b.dataset.pgscout; renderProgression(v); window.scrollTo(0, 0); }; });
-  if ($('#progEdit', v)) $('#progEdit', v).onclick = () => openProgEditor(() => go('progression', true));
 }
 
 function renderScoutProg(v, P) {
   const m = S.data.members.find(x => x.id === P.memberId);
-  const when = (key) => { const d = S.progDone.get(m.id + '|' + key); return d ? fmtShort(isoOf(new Date(d.doneAt))) + (d.doneBy ? ' · ' + d.doneBy : '') : ''; };
-  let html = '<button class="btn ghost sm" id="pgBack" style="padding-left:0">' + icon('back', 'sm') + 'All scouts</button>' +
-    '<div class="row" style="flex-wrap:nowrap;--pc:' + patrolColor(m.patrol) + '"><span class="avatar">' + esc(initials(m.name)) + '</span>' +
-    '<div><h1 style="font-size:22px">' + esc(m.name) + '</h1><p class="sub" style="margin:0">' + esc(m.patrol) + (m.birthYear ? ' · ' + esc(m.birthYear) : '') + ' · <span id="pgNext">' + esc(progNext(m.id)) + '</span></p></div></div>';
-  html += progGroups().map(g => {
-    const items = progItemsOf(g.id);
-    const s = progStatus(m.id, g);
-    if (g.kind === 'badges') {
-      return '<section class="card" data-group="' + esc(g.id) + '"><div class="card-head"><h2>' + esc(g.name) + '</h2><span class="pill accent" data-gcount>' + s.done + (items.length ? ' / ' + items.length : '') + '</span></div>' +
-        (items.length ? '<div class="badge-grid">' + items.map(i =>
-          '<button class="badge-chip" data-pgkey="' + esc(i.id) + '" aria-pressed="' + progIsDone(m.id, i.id) + '" title="' + esc(when(i.id)) + '">' + icon('check', 'sm') + esc(i.name) + '</button>').join('') + '</div>'
-          : '<p class="empty">' + (isAdmin() ? 'No badges in the list yet. Add them with "Edit étapes & badges".' : 'The chief has not added the badges yet.') + '</p>') + '</section>';
-    }
-    return '<section class="card" data-group="' + esc(g.id) + '"><div class="card-head"><h2>' + esc(g.name) + '</h2><div class="pg-head-right">' +
-        (items.length ? '<span class="pill" data-gcount>' + s.done + '/' + s.n + '</span>' : '') +
-        '<button class="btn sm obt-btn" data-pgkey="obtained:' + esc(g.id) + '" aria-pressed="' + s.obtained + '">' + icon('check', 'sm') + (s.obtained ? 'Obtained' : 'Not obtained') + '</button></div></div>' +
-      (items.length ? '<div class="progress" style="margin:12px 16px 2px"><span class="good" data-gbar style="width:' + (s.done / s.n * 100) + '%"></span></div>' +
-        '<p class="small muted" style="margin:6px 16px 0" data-gleft>' + (s.left ? plural(s.left, 'étape') + ' left' : 'All étapes done') + '</p>' +
-        items.map(i => '<button class="pg-item" data-pgkey="' + esc(i.id) + '" aria-pressed="' + progIsDone(m.id, i.id) + '"><span class="pg-box">' + icon('check', 'sm') + '</span>' +
-          '<span class="grow"><span class="nm">' + esc(i.name) + '</span><span class="when">' + esc(when(i.id)) + '</span></span></button>').join('')
-        : '<p class="empty">' + (isAdmin() ? 'No étapes yet. Add them with "Edit étapes & badges" (Progression list).' : 'The chief has not added the étapes for ' + esc(g.name) + ' yet.') + '</p>') +
+  const when = (d) => (d ? fmtShort(isoOf(new Date(d.doneAt))) + (d.doneBy ? ' · ' + d.doneBy : '') : '');
+  const draw = () => {
+    const top = progLevel(m.id);
+    const badges = scoutBadges(m.id);
+    v.innerHTML = '<button class="btn ghost sm" id="pgBack" style="padding-left:0">' + icon('back', 'sm') + 'All scouts</button>' +
+      '<div class="row" style="flex-wrap:nowrap;--pc:' + patrolColor(m.patrol) + '"><span class="avatar">' + esc(initials(m.name)) + '</span>' +
+      '<div><h1 style="font-size:22px">' + esc(m.name) + '</h1><p class="sub" style="margin:0">' + esc(m.patrol) + (m.birthYear ? ' · ' + esc(m.birthYear) : '') + ' · ' + esc(top ? top.name : 'No level yet') + '</p></div></div>' +
+      '<section class="card"><div class="card-head"><h2>Level</h2></div>' +
+        '<p class="small muted" style="margin:10px 16px 0">Tapping a level also ticks the ones before it. Untick one to remove it and the ones after.</p>' +
+        progLevels().map(g => {
+          const on = levelObtained(m.id, g);
+          return '<button class="pg-item" data-level="' + esc(g.id) + '" aria-pressed="' + on + '"><span class="pg-box">' + icon('check', 'sm') + '</span>' +
+            '<span class="grow"><span class="nm">' + esc(g.name) + '</span><span class="when">' + esc(when(S.progDone.get(m.id + '|obtained:' + g.id))) + '</span></span></button>';
+        }).join('') + '</section>' +
+      '<section class="card"><div class="card-head"><h2>Badges</h2><span class="pill accent">' + badges.length + '</span></div>' +
+        '<form id="badgeForm" class="row" style="padding:14px 16px 4px;flex-wrap:nowrap">' +
+          '<input class="input" name="badge" list="badgeNames" maxlength="60" placeholder="Badge name…" style="margin:0" autocomplete="off">' +
+          '<button class="btn primary" type="submit">' + icon('plus', 'sm') + 'Add</button></form>' +
+        '<datalist id="badgeNames">' + knownBadges().map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
+        (badges.length ? badges.map(b =>
+          '<div class="pg-item" style="cursor:default"><span class="pg-box" style="background:var(--good);border-color:var(--good);color:#fff">' + icon('check', 'sm') + '</span>' +
+          '<span class="grow"><span class="nm" style="color:var(--text)">' + esc(b.name) + '</span><span class="when">' + esc(when(b.d)) + '</span></span>' +
+          '<button class="icon-btn" data-badge-rm="' + esc(b.key) + '" aria-label="Remove ' + esc(b.name) + '">' + icon('x', 'sm') + '</button></div>').join('')
+          : '<p class="empty">No badges yet.</p>') +
       '</section>';
-  }).join('');
-  v.innerHTML = html;
-  $('#pgBack', v).onclick = () => { P.memberId = null; renderProgression(v); };
-  v.onclick = (e) => {
-    const b = e.target.closest('[data-pgkey]');
-    if (!b || !v.contains(b)) return;
-    const key = b.dataset.pgkey;
-    const done = progToggle(m.id, key);
-    b.setAttribute('aria-pressed', String(done));
-    if (key.indexOf('obtained:') === 0) b.lastChild.textContent = done ? 'Obtained' : 'Not obtained';
-    const w = b.querySelector('.when');
-    if (w) w.textContent = when(key);
-    // refresh the counters of that group and the "next" line, without redrawing the page
-    const sec = b.closest('[data-group]');
-    const g = progGroups().find(x => x.id === sec.dataset.group);
-    const s = progStatus(m.id, g);
-    const cnt = $('[data-gcount]', sec);
-    if (cnt) cnt.textContent = g.kind === 'badges' ? s.done + (s.n ? ' / ' + s.n : '') : s.done + '/' + s.n;
-    const bar = $('[data-gbar]', sec);
-    if (bar) bar.style.width = (s.n ? s.done / s.n * 100 : 0) + '%';
-    const left = $('[data-gleft]', sec);
-    if (left) left.textContent = s.left ? plural(s.left, 'étape') + ' left' : 'All étapes done';
-    $('#pgNext', v).textContent = progNext(m.id);
+    $('#pgBack', v).onclick = () => { P.memberId = null; renderProgression(v); };
+    $('#badgeForm', v).onsubmit = (e) => {
+      e.preventDefault();
+      const name = e.target.elements.badge.value.replace(/\s+/g, ' ').trim().slice(0, 60);
+      if (!name) return;
+      const same = scoutBadges(m.id).find(b => nameKey(b.name) === nameKey(name));
+      if (same) { toast(m.name + ' already has ' + same.name); return; }
+      const known = knownBadges().find(n => nameKey(n) === nameKey(name));   // same spelling as the others
+      progSetKey(m.id, 'badge:' + (known || name.charAt(0).toUpperCase() + name.slice(1)), true);
+      draw();
+      $('#badgeForm input', v).focus();
+    };
   };
-}
-
-/** Chief: the stages and badge list. Étapes / badges are typed one per line. */
-function openProgEditor(after) {
-  openModal('<h2>Étapes &amp; badges</h2><p class="sub">Each stage has its étapes; Badges is the list of badges. Tap one to edit it.</p>' +
-    '<div style="margin-top:8px">' + progGroups().map(g =>
-      '<div class="rep"><div class="grow"><b>' + esc(g.name) + '</b><div class="tags"><span class="pill">' + (g.kind === 'badges' ? 'Badges' : 'Stage') + '</span>' +
-      '<span class="pill">' + plural(progItemsOf(g.id).length, g.kind === 'badges' ? 'badge' : 'étape') + '</span></div></div>' +
-      '<button class="btn sm" data-pgg="' + esc(g.id) + '">Edit</button></div>').join('') + '</div>' +
-    '<div class="modal-actions"><button class="btn" id="pggNew">' + icon('plus', 'sm') + 'New stage</button><span class="spacer"></span><button class="btn primary" data-close>Done</button></div>', {
-    wide: true,
-    onClose: () => { if (after) after(); },
-    onMount: (md, close) => {
-      $$('[data-pgg]', md).forEach(b => { b.onclick = () => { close(); editProgGroup(progGroups().find(g => g.id === b.dataset.pgg), after); }; });
-      $('#pggNew', md).onclick = () => { close(); editProgGroup(null, after); };
-    },
-  });
-}
-
-function editProgGroup(g, after) {
-  const isNew = !g;
-  g = g || { name: '', kind: 'stage' };
-  const items = isNew ? [] : progItemsOf(g.id).map(i => i.name);
-  openModal('<h2>' + (isNew ? 'New stage' : esc(g.name)) + '</h2>' +
-    '<form id="pggForm" style="margin-top:14px">' +
-      '<label class="field">Name<input class="input" name="name" maxlength="60" required value="' + esc(g.name) + '"></label>' +
-      '<label class="field">Type<select class="input" name="kind"><option value="stage">Stage (with étapes and "Obtained")</option><option value="badges"' + (g.kind === 'badges' ? ' selected' : '') + '>Badges list</option></select></label>' +
-      '<label class="field">' + (g.kind === 'badges' ? 'Badges' : 'Étapes') + ' — one per line<textarea class="input" name="items" rows="10" style="font-size:16px;line-height:1.5">' + esc(items.join('\n')) + '</textarea></label>' +
-      '<p class="muted small" style="margin-top:6px">Lines you keep keep their ticks. A line you remove loses its ticks.</p>' +
-      '<p class="err" id="pggErr"></p><div class="modal-actions">' + (!isNew ? '<button type="button" class="btn danger" id="pggDel">Delete</button><span class="spacer"></span>' : '') +
-      '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button></div></form>', {
-    wide: true,
-    onMount: (md, close) => {
-      const f = $('#pggForm', md);
-      f.onsubmit = async (e) => {
-        e.preventDefault();
-        try {
-          await progBatch.flush();
-          const res = await call('saveProgGroup', { id: g.id, name: f.elements.name.value, kind: f.elements.kind.value, items: f.elements.items.value });
-          S.data.prog = { groups: res.groups, items: res.items, done: res.done };
-          indexData();
-          close();
-          toast('Saved');
-          if (after) after();
-        } catch (err) { $('#pggErr', md).textContent = err.message; }
-      };
-      if ($('#pggDel', md)) $('#pggDel', md).onclick = async () => {
-        close();
-        if (!await confirmBox('Delete ' + g.name + '?', 'Its ' + (g.kind === 'badges' ? 'badges' : 'étapes') + ' and every tick on them are deleted.', 'Delete', true)) return;
-        try {
-          await progBatch.flush();
-          const res = await call('deleteProgGroup', { id: g.id });
-          S.data.prog = res;
-          indexData();
-          toast('Deleted');
-          if (after) after();
-        } catch (err) { toast(err.message, 'bad'); }
-      };
-    },
-  });
+  draw();
+  v.onclick = async (e) => {
+    const lv = e.target.closest('[data-level]');
+    if (lv && v.contains(lv)) {
+      const g = progLevels().find(x => x.id === lv.dataset.level);
+      setLevel(m.id, g, !levelObtained(m.id, g));
+      const y = window.scrollY;
+      draw();
+      window.scrollTo(0, y);
+      return;
+    }
+    const rm = e.target.closest('[data-badge-rm]');
+    if (rm && v.contains(rm)) {
+      const key = rm.dataset.badgeRm;
+      if (!await confirmBox('Remove this badge?', esc(scoutBadges(m.id).find(b => b.key === key).name) + ' will be removed from ' + esc(m.name) + '.', 'Remove', true)) return;
+      progSetKey(m.id, key, false);
+      draw();
+    }
+  };
 }
 
 // =================================================================== PRESENCE
@@ -1751,7 +1721,14 @@ function drawSummary() {
   const missing = members.length - filled;
   const total = members.length || 1;
   let html = '<div class="sum-top"><div class="count"><b>' + filled + '</b> of ' + members.length + ' filled</div>';
+  // "They came" can start from what they said: coming -> present, late -> late, not coming -> absent.
+  const FROM_SAID = { coming: 'present', late: 'late', out: 'absent' };
+  const fillable = P.phase === 'sat' ? members.filter(m => {
+    const r = rec(pkey(), m.id) || {};
+    return !r.satStatus && FROM_SAID[r.wedStatus];
+  }) : [];
   if (missing > 0 && !presenceLocked()) {
+    if (fillable.length) html += '<button class="btn sm primary" data-autofill>' + icon('presence', 'sm') + 'Fill from They said (' + fillable.length + ')</button>';
     html += P.phase === 'wed'
       ? '<button class="btn sm" data-bulk="noreply">' + icon('question', 'sm') + 'Rest = No reply</button>'
       : '<button class="btn sm" data-bulk="present">' + icon('check', 'sm') + 'Rest = Present</button>';
@@ -1771,6 +1748,20 @@ function drawSummary() {
   }
   const el = $('#presSummary');
   el.innerHTML = html;
+  const auto = $('[data-autofill]', el);
+  if (auto) auto.onclick = async () => {
+    const n = { present: 0, late: 0, absent: 0 };
+    fillable.forEach(m => { n[FROM_SAID[rec(pkey(), m.id).wedStatus]]++; });
+    if (!await confirmBox('Fill from They said?',
+      plural(fillable.length, 'scout') + ' not marked yet will be filled from their answer: <b>' + n.present + ' present</b>, <b>' + n.late + ' late</b>, <b>' + n.absent + ' absent</b> (with their reason). ' +
+      'Change the ones that did something else after.', 'Fill ' + fillable.length)) return;
+    fillable.forEach(m => {
+      const r = rec(pkey(), m.id);
+      setAnswer(pkey(), m.id, 'sat', FROM_SAID[r.wedStatus], r.wedReason || '');
+    });
+    drawList();
+    drawSummary();
+  };
   const bulk = $('[data-bulk]', el);
   if (bulk) bulk.onclick = async () => {
     const st = bulk.dataset.bulk;

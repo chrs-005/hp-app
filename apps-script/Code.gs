@@ -657,7 +657,10 @@ function progSet_(p, token) {
   const changes = {};
   (Array.isArray(p.changes) ? p.changes : []).slice(0, 2000).forEach(c => {
     const m = members[c.memberId];
-    if (!m || !keys[c.key]) return;   // deleted scout / étape: ignore
+    // A badge is typed by name: key 'badge:<name>'.
+    if (/^badge:/.test(c.key)) c.key = 'badge:' + String(c.key).slice(6).replace(/\s+/g, ' ').trim().slice(0, 60);
+    const isBadge = /^badge:./.test(c.key);
+    if (!m || !(keys[c.key] || isBadge)) return;   // deleted scout / stage: ignore
     if (scope && !scope[m.patrol]) throw new Error('You are not in charge of ' + m.name + '.');
     changes[c.memberId + '|' + c.key] = c;
   });
