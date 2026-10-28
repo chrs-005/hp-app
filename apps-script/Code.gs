@@ -14,7 +14,8 @@ const DB_SCHEMA = {
   reporters: ['id', 'name', 'pinHash', 'role', 'patrols', 'createdAt'],
   meetings: ['date', 'cancelled', 'note', 'updatedAt'],
   // Camps and special events. Their attendance rows use the event id in place of a date.
-  events: ['id', 'title', 'kind', 'date', 'endDate', 'order', 'createdAt'],
+  // patrolDates: JSON { patrol: { date, endDate } } when each patrol has its own dates (Camp Patrouille).
+  events: ['id', 'title', 'kind', 'date', 'endDate', 'order', 'createdAt', 'patrolDates'],
   // Phones that turned on reminders (web push subscriptions).
   push: ['endpoint', 'reporterId', 'createdAt', 'lastSent', 'lastStatus'],
   // Money (chief only): orders (troupe-wide or for one scout) and one line per scout / item.
@@ -762,18 +763,44 @@ function events_() {
     });
   }
   return rows
-    .map(r => ({ id: r.id, title: r.title, kind: r.kind || 'special', date: r.date, endDate: r.endDate, order: Number(r.order) || 0 }))
+    .map(r => ({ id: r.id, title: r.title, kind: r.kind || 'special', date: r.date, endDate: r.endDate, order: Number(r.order) || 0, patrolDates: parsePatrolDates_(r.patrolDates) }))
     .sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'camp' ? -1 : 1) ||
       (a.kind === 'camp' ? a.order - b.order : (a.date || '9999').localeCompare(b.date || '9999') || a.order - b.order));
 }
 
-/** payload: { id?, title, date?, endDate? }. New events are "special" events. */
+function parsePatrolDates_(text) {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch (err) { return null; }
+}
+
+/**
+ * payload: { id?, title, date?, endDate?, patrolDates? }. New events are "special" events.
+ * patrolDates = { patrol: { date, endDate } } gives each patrol its own dates; date / endDate then
+ * become the first start and the last end (used for sorting).
+ */
 function saveEvent_(p, token) {
   requireAdmin_(token);
   const title = String(p.title || '').replace(/\s+/g, ' ').trim().slice(0, 60);
   if (!title) throw new Error('Give the event a name.');
-  ['date', 'endDate'].forEach(k => { if (p[k] && !isIsoDate_(p[k])) throw new Error('Bad date.'); });
-  if (p.date && p.endDate && p.endDate < p.date) throw new Error('The end date is before the start date.');
+  const check = (from, to, who) => {
+    [from, to].forEach(x => { if (x && !isIsoDate_(x)) throw new Error('Bad date' + who + '.'); });
+    if (from && to && to < from) throw new Error('The end date is before the start date' + who + '.');
+  };
+  let patrolDates = null;
+  if (p.patrolDates && typeof p.patrolDates === 'object') {
+    patrolDates = {};
+    Object.keys(p.patrolDates).slice(0, 30).forEach(k => {
+      const d = p.patrolDates[k] || {};
+      const name = String(k).slice(0, 40);
+      check(d.date, d.endDate, ' for ' + name);
+      if (d.date || d.endDate) patrolDates[name] = { date: d.date || '', endDate: d.endDate || '' };
+    });
+    const starts = Object.keys(patrolDates).map(k => patrolDates[k].date).filter(Boolean).sort();
+    const ends = Object.keys(patrolDates).map(k => patrolDates[k].endDate || patrolDates[k].date).filter(Boolean).sort();
+    p.date = starts[0] || '';
+    p.endDate = ends.length ? ends[ends.length - 1] : '';
+  }
+  check(p.date, p.endDate, '');
   return withLock_(() => {
     const rows = readTable_('events').map(stripRow_);
     let r = p.id ? rows.find(x => x.id === p.id) : null;
@@ -785,6 +812,7 @@ function saveEvent_(p, token) {
     r.title = title;
     r.date = p.date || '';
     r.endDate = p.endDate || '';
+    r.patrolDates = patrolDates ? JSON.stringify(patrolDates) : '';
     writeTable_('events', rows);
     return { events: events_(), id: r.id };
   });
@@ -1453,9 +1481,19 @@ function db_() {
   return ss;
 }
 
+const headerChecked_ = {};
 function sheet_(name) {
   const ss = db_();
   let sh = ss.getSheetByName(name);
+  if (sh && !headerChecked_[name]) {
+    headerChecked_[name] = true;
+    const cols = DB_SCHEMA[name].length;
+    const head = sh.getRange(1, 1, 1, cols).getDisplayValues()[0];
+    if (head.join('|') !== DB_SCHEMA[name].join('|')) {
+      sh.getRange(1, 1, sh.getMaxRows(), cols).setNumberFormat('@');
+      sh.getRange(1, 1, 1, cols).setValues([DB_SCHEMA[name]]).setFontWeight('bold');
+    }
+  }
   if (!sh) {
     sh = ss.insertSheet(name);
     const cols = DB_SCHEMA[name].length;

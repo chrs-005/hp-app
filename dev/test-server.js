@@ -460,6 +460,30 @@ assert.strictEqual(c3('progSet', { changes: [{ memberId: scout.id, key: cook.id,
 assert.match(s3.api({ action: 'progSet', payload: { changes: [{ memberId: other.id, key: cook.id, done: true }] }, token: pcTok }).error, /not in charge/);
 assert.match(s3.api({ action: 'saveProgGroup', payload: { name: 'X', kind: 'stage', items: '' }, token: pcTok }).error, /Only the chief/);
 
+// ---- Camp Patrouille: one set of dates per patrol.
+const evSheet = f3.SpreadsheetApp.openById('DB').getSheetByName('events');
+const campP = c3('state', {}, setup3.token).events.find(e => e.title === 'Camp Patrouille');
+let evr = c3('saveEvent', { id: campP.id, title: 'Camp Patrouille', patrolDates: {
+  Panda: { date: '2026-11-06', endDate: '2026-11-08' }, Leopard: { date: '2026-11-13', endDate: '2026-11-15' },
+  Faucon: { date: '2026-11-20' }, Bison: { date: '', endDate: '' }, Requin: { date: '2026-10-30', endDate: '2026-11-01' },
+} }, setup3.token);
+let cp2 = evr.events.find(e => e.id === campP.id);
+assert.deepStrictEqual(Object.keys(cp2.patrolDates), ['Panda', 'Leopard', 'Faucon', 'Requin']);   // empty patrol skipped
+assert.strictEqual(cp2.date, '2026-10-30');       // first start
+assert.strictEqual(cp2.endDate, '2026-11-20');    // last end
+assert.deepStrictEqual(cp2.patrolDates.Leopard, { date: '2026-11-13', endDate: '2026-11-15' });
+assert.match(s3.api({ action: 'saveEvent', payload: { id: campP.id, title: 'Camp Patrouille', patrolDates: { Panda: { date: '2026-11-08', endDate: '2026-11-06' } } }, token: setup3.token }).error, /before the start date for Panda/);
+// Back to one date for everyone.
+evr = c3('saveEvent', { id: campP.id, title: 'Camp Patrouille', date: '2026-11-06', endDate: '2026-11-08' }, setup3.token);
+assert.strictEqual(evr.events.find(e => e.id === campP.id).patrolDates, null);
+// A database made before this column existed gets its header fixed and keeps its rows.
+evSheet.getRange(1, 8, 1, 1).setValues([['']]);
+const before8 = evSheet.getLastRow();
+const s3b = loadServer(code, f3);
+ok(s3b.api({ action: 'state', payload: {}, token: setup3.token }));
+assert.strictEqual(evSheet.getRange(1, 8, 1, 1).getDisplayValues()[0][0], 'patrolDates');
+assert.strictEqual(evSheet.getLastRow(), before8);
+
 // Setup with a bad link still creates the chief and reports the problem.
 const f4 = makeFakes({ source: source, standalone: true });
 const s4 = loadServer(code, f4);
